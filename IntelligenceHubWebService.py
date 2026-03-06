@@ -1,8 +1,5 @@
-import os
 import re
-import time
 import json
-import uuid
 import logging
 import datetime
 import dateutil
@@ -11,7 +8,7 @@ import traceback
 from functools import wraps
 from typing import List, Tuple, Any, Dict
 from dateutil import parser as date_parser
-from flask import Flask, g, request, jsonify, session, redirect, url_for, render_template, abort, send_file, \
+from flask import Flask, request, jsonify, session, redirect, url_for, render_template, abort, send_file, \
     make_response, Response
 
 from GlobalConfig import *
@@ -24,8 +21,6 @@ from Tools.CommonPost import common_post
 from MyPythonUtility.ArbitraryRPC import RPCService
 from ServiceComponent.RSSPublisher import RSSPublisher, FeedItem
 from ServiceComponent.PostManager import generate_html_from_markdown
-from ServiceComponent.ArticleRender import default_article_render
-from ServiceComponent.ArticleListRender import default_article_list_render
 from IntelligenceHub import CollectedData, IntelligenceHub, ProcessedData, APPENDIX_TIME_ARCHIVED
 from Tools.DateTimeUtility import get_aware_time, ensure_timezone_aware, time_str_to_datetime
 from Tools.RequestTracer import RequestTracer
@@ -400,9 +395,14 @@ class IntelligenceHubWebService:
 
         @app.route('/recommendations', methods=['GET'])
         def intelligences_recommendations_page():
-            recommendations = self.intelligence_hub.get_recommendations()
-            return default_article_list_render(
-                recommendations, offset=0, count=len(recommendations), total_count=len(recommendations))
+            # recommendations = self.intelligence_hub.get_recommendations()
+            # return default_article_list_render(
+            #     recommendations, offset=0, count=len(recommendations), total_count=len(recommendations))
+            return ''
+
+        @app.route('/intelligences/clusters', methods=['GET'])
+        def intelligences_clusters_view():
+            return render_template('intelligence_cluster_list.html')
 
         @app.route('/intelligences/search', methods=['GET'])
         @WebServiceAccessManager.login_required
@@ -624,6 +624,152 @@ class IntelligenceHubWebService:
             return articles, len(raw)
 
         # --------------------------------------------------------------------------------------------
+
+        @app.get("/api/clusters/latest")
+        def api_clusters_latest():
+            """
+            Return latest offline clusters summary with repr article titles (joined from Mongo archive).
+            Query params:
+              - plan_id (optional): default agg_intelligence_summary_24h
+              - limit (optional): default 200
+              - sort_by (optional): size|last_seen|cluster_id
+              - desc (optional): 1/0
+            """
+            try:
+                plan_id = request.args.get("plan_id", "agg_intelligence_summary_24h")
+                limit = int(request.args.get("limit", 200))
+                sort_by = request.args.get("sort_by", "size")
+                desc = request.args.get("desc", "1") in ("1", "true", "True", "yes", "Y", "y")
+
+                hub = self.intelligence_hub
+
+                agg = getattr(hub, "aggregation_engine_summary", None)
+                if not agg:
+                    return jsonify({"error": "Aggregation engine not configured"}), 501
+
+                # 1) get cluster summaries (repr_doc_id etc.)
+                summary = agg.get_latest_clusters_summary(
+                    sort_by=sort_by,
+                    descending=desc,
+                    limit=limit,
+                    include_noise=False
+                )
+
+                clusters = summary.get("clusters") or []
+                if not clusters:
+                    return jsonify(summary), 200
+
+                # 2) batch fetch repr articles from Mongo archive
+                repr_ids = [c.get("repr_doc_id") for c in clusters if c.get("repr_doc_id")]
+                repr_ids = list(dict.fromkeys(repr_ids))  # unique keep order
+
+                repr_docs = hub.get_intelligence(repr_ids) if repr_ids else []
+                if isinstance(repr_docs, dict):
+                    repr_docs = [repr_docs]
+
+                repr_map = {d.get("UUID"): d for d in (repr_docs or []) if isinstance(d, dict)}
+
+                # 3) attach title + href
+                out_clusters = []
+                for c in clusters:
+                    uuid = c.get("repr_doc_id")
+                    doc = repr_map.get(uuid) or {}
+                    title = doc.get("EVENT_TITLE") or doc.get("title") or "(No Title)"
+                    brief = doc.get("EVENT_BRIEF") or ""
+
+                    out_clusters.append({
+                        "cluster_id": c.get("cluster_id"),
+                        "size": c.get("size", 0),
+                        "last_seen": c.get("last_seen"),
+                        "repr_uuid": uuid,
+                        "repr_title": title,
+                        "repr_brief": brief,
+                        "href": f"/intelligence/{uuid}" if uuid else "#",
+                    })
+
+                # keep original metadata
+                return jsonify({
+                    "plan_id": summary.get("plan_id"),
+                    "collection_name": summary.get("collection_name"),
+                    "version": summary.get("version"),
+                    "created_at": summary.get("created_at"),
+                    "time_range": summary.get("time_range"),
+                    "method": summary.get("method"),
+                    "params": summary.get("params"),
+                    "n_points": summary.get("n_points"),
+                    "n_clusters": summary.get("n_clusters"),
+                    "clusters": out_clusters
+                }), 200
+
+            except Exception as e:
+                logger.exception("api_clusters_latest error")
+                return jsonify({"error": str(e)}), 500
+
+        @app.get("/api/clusters/<cluster_id>/members")
+        def api_cluster_members(cluster_id: str):
+            """
+            返回某个 cluster 的成员子情报（仅标题+链接），从最新离线聚合里取 members，再从 Mongo 补齐标题。
+            Query params:
+              - plan_id: 默认 agg_intelligence_summary_24h
+              - limit: 默认 100（上限 500）
+              - offset: 默认 0
+            """
+            try:
+                plan_id = request.args.get("plan_id", "agg_intelligence_summary_24h")
+                limit = int(request.args.get("limit", 100))
+                offset = int(request.args.get("offset", 0))
+
+                hub = self.intelligence_hub
+                agg = getattr(hub, "aggregation_engine_summary", None)
+                if not agg:
+                    return jsonify({"error": "Aggregation engine not configured"}), 501
+
+                latest = agg.get_latest_offline() or {}
+                clusters = latest.get("clusters") or {}
+                cobj = clusters.get(cluster_id)
+                if not cobj:
+                    return jsonify({"error": f"cluster_id not found: {cluster_id}"}), 404
+
+                members = cobj.get("members") or []
+                total = len(members)
+
+                offset = max(0, offset)
+                limit = max(1, min(500, limit))
+                sub = members[offset: offset + limit]
+
+                docs = hub.get_intelligence(sub) if sub else []
+                if isinstance(docs, dict):
+                    docs = [docs]
+
+                # 保持 members 原顺序
+                rank = {u: i for i, u in enumerate(sub)}
+                items = []
+                for d in (docs or []):
+                    if not isinstance(d, dict):
+                        continue
+                    uid = d.get("UUID")
+                    if uid not in rank:
+                        continue
+                    title = d.get("EVENT_TITLE") or d.get("title") or "(No Title)"
+                    items.append({
+                        "uuid": uid,
+                        "title": title,
+                        "href": f"/intelligence/{uid}"
+                    })
+
+                items.sort(key=lambda x: rank.get(x["uuid"], 10 ** 9))
+
+                return jsonify({
+                    "cluster_id": cluster_id,
+                    "total": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "items": items
+                }), 200
+
+            except Exception as e:
+                logger.exception("api_cluster_members error")
+                return jsonify({"error": str(e)}), 500
 
         @app.route('/intelligence/<string:intelligence_uuid>', methods=['GET'])
         def intelligence_viewer_api(intelligence_uuid: str):

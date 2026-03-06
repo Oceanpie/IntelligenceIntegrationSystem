@@ -883,8 +883,9 @@ class IntelligenceHub:
                     self.vector_db_engine_full_text = IntelligenceVectorDBEngine(vector_db_full_text)
                     self.aggregation_engine_summary = aggregation_engine_summary
 
+                self._bootstrap_aggregation_once()
+
                 # 3. Success
-                clock = Clock()  # Assuming Clock is instantiated at start of function if needed
                 logger.info(f'Vector DB initialized successfully.')
                 return True
 
@@ -1013,6 +1014,21 @@ class IntelligenceHub:
 
         except Exception as e:
             logger.error(f"Hourly summary aggregation trigger failed: {e}", exc_info=True)
+
+    def _bootstrap_aggregation_once(self):
+        """
+        Bootstrap aggregation after VectorDB is ready:
+          - init aggregation engine (ensure plan)
+          - trigger ONE offline aggregation run at startup
+
+        This method is idempotent (runs only once).
+        """
+        try:
+            if self.aggregation_engine_summary:
+                job_id = self.aggregation_engine_summary.trigger_offline(overrides=None, time_range=None)
+                logger.info(f"[AggregationBootstrap] triggered first offline aggregation job: {job_id}")
+        except Exception as e:
+            logger.error(f"Aggregation bootstrap failed: {e}", exc_info=True)
 
     # def _do_generate_recommendation(self):
     #     now = datetime.datetime.now()

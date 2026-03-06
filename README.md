@@ -140,13 +140,13 @@ v2版本兼容v1版本的数据，数据库不需要额外的升级操作。
     > 
     > [PostManager.py](ServiceComponent/PostManager.py)：根据 [posts](posts) 目录下的markdown文件生成HTML。
     > 
-    > [ArticleRender.py](ServiceComponent/ArticleRender.py)：文章页面。
+    > [ArticleRender.py](recycled/ArticleRender.py)：文章页面。
     > 
-    > [ArticleListRender.py](ServiceComponent/ArticleListRender.py)：文章列表页面。
+    > [ArticleListRender.py](recycled/ArticleListRender.py)：文章列表页面。
     > 
     > [intelligence_search.html](templates/intelligence_search.html)：文章查询页面（20251029：重构为前后端分离）。
     > 
-    > （旧）[ArticleTableRender.py](ServiceComponent/ArticleTableRender.py)：文章列表项。
+    > （旧）[ArticleTableRender.py](recycled/ArticleTableRender.py)：文章列表项。
     > （新）[intelligence_table.js](static/js/intelligence_table.js)：文章列表项。
     > 
     > 子功能页面，由对应模块提供，前后端分离。这里就不列出了，详见登录后的管理页面。
