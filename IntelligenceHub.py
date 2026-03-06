@@ -13,6 +13,7 @@ from pymongo.errors import ConnectionFailure
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_result
 
 from GlobalConfig import EXPORT_PATH
+from ServiceComponent.IntelligenceAggregationEngine import IntelligenceAggregationEngine, AggregationPlanSpec
 from prompts_v2x import ANALYSIS_PROMPT_TABLE
 from Tools.MongoDBAccess import MongoDBStorage
 from VectorDB.VectorDBClient import VectorDBClient
@@ -109,6 +110,7 @@ class IntelligenceHub:
 
         self.vector_db_engine_summary: Optional[IntelligenceVectorDBEngine] = None
         self.vector_db_engine_full_text: Optional[IntelligenceVectorDBEngine] = None
+        self.aggregation_engine_summary: Optional[IntelligenceAggregationEngine] = None
 
         self.scheduler = AdvancedScheduler(logger=logging.getLogger('Scheduler'))
         # TODO: This cache seems to be ugly.
@@ -158,6 +160,11 @@ class IntelligenceHub:
             func=self._do_export_mongodb_monthly,
             task_id = '_do_export_mongodb_monthly_task',
             day=1,
+            use_new_thread=True
+        )
+        self.scheduler.add_hourly_task(
+            func=self._do_run_summary_aggregation,
+            task_id="summary_aggregation_hourly",
             use_new_thread=True
         )
         self.scheduler.start_scheduler()
@@ -854,9 +861,27 @@ class IntelligenceHub:
                     chunk_overlap=50
                 )
 
+                plan_spec = AggregationPlanSpec(
+                    plan_id="agg_intelligence_summary_24h",
+                    collection_name="intelligence_summary",
+                    time_window_sec=24 * 3600,
+                    run_every_sec=3600,
+                    method="hdbscan",
+                    params={"min_cluster_size": 3, "min_samples": 2},
+                    max_points=50000,
+                    enable_online=True,
+                    online_params={"T_event": 0.85, "T_dup": 0.95},
+                    persist=True,
+                    time_field="timestamp",
+                )
+
+                aggregation_engine_summary = IntelligenceAggregationEngine(self.vector_db_client, plan_spec)
+                aggregation_engine_summary.ensure_plan(overwrite=False)
+
                 with self.lock:
                     self.vector_db_engine_summary = IntelligenceVectorDBEngine(vector_db_summary)
                     self.vector_db_engine_full_text = IntelligenceVectorDBEngine(vector_db_full_text)
+                    self.aggregation_engine_summary = aggregation_engine_summary
 
                 # 3. Success
                 clock = Clock()  # Assuming Clock is instantiated at start of function if needed
@@ -879,6 +904,7 @@ class IntelligenceHub:
 
         logger.info("Vector DB init worker stopped due to shutdown signal.")
         return False
+
 
     # ------------------------------------------------ Scheduled Tasks -------------------------------------------------
 
@@ -968,6 +994,25 @@ class IntelligenceHub:
 
         except Exception as e:
             logger.error(f"Monthly mongodb export failed: {e}", exc_info=True)
+
+    def _do_run_summary_aggregation(self):
+        """
+        Hourly task: trigger offline aggregation for summary plan.
+        Persistence is handled by VectorDB service after offline completes.
+        """
+        try:
+            if not self.aggregation_engine_summary:
+                logger.warning("Aggregation engine not ready; skip hourly aggregation.")
+                return
+
+            job_id = self.aggregation_engine_summary.trigger_offline(overrides=None, time_range=None)
+            if job_id:
+                logger.info(f"Triggered summary aggregation offline job: {job_id}")
+            else:
+                logger.warning("Triggered summary aggregation but got no job_id.")
+
+        except Exception as e:
+            logger.error(f"Hourly summary aggregation trigger failed: {e}", exc_info=True)
 
     # def _do_generate_recommendation(self):
     #     now = datetime.datetime.now()
