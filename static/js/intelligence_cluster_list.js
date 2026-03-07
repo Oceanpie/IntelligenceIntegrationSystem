@@ -1,264 +1,200 @@
-// static/js/intelligence_cluster_list.js
 document.addEventListener('DOMContentLoaded', () => {
-  const API_LATEST = '/api/clusters/latest';
-  const API_MEMBERS = (clusterId) => `/api/clusters/${encodeURIComponent(clusterId)}/members`;
+    // 复用 ArticleRenderer 提供的时间高亮和卡片生成能力
+    // 这里第二个参数传空，因为聚类页面我们不使用标准的分页条
+    const renderer = new ArticleRenderer('article-list-container', '');
+    const listContainer = document.getElementById('article-list-container');
+    const limitSelect = document.getElementById('limit-select');
+    const refreshBtn = document.getElementById('refresh-btn');
 
-  const container = document.getElementById('cluster-list-container');
-  const refreshBtn = document.getElementById('refresh-btn');
-  const sortSelect = document.getElementById('sort-select');
+    async function loadClusters() {
+        const limit = limitSelect ? limitSelect.value : 50;
+        renderer.showLoading();
 
-  function showLoading() {
-    container.innerHTML = `<div class="loading-spinner">Loading Clusters...</div>`;
-  }
+        try {
+            const response = await fetch(`/api/clusters/latest?limit=${limit}`);
+            if (!response.ok) throw new Error(`API Error: ${response.status}`);
 
-  function showError(msg) {
-    container.innerHTML = `<div style="color:red;padding:20px;text-align:center;">Error: ${msg}</div>`;
-  }
+            const data = await response.json();
+            const clusters = data.clusters || [];
 
-  function escapeHTML(str) {
-    if (str === null || str === undefined) return "";
-    return String(str).replace(/[&<>"']/g, m => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[m]));
-  }
+            if (clusters.length === 0) {
+                listContainer.innerHTML = '<p style="text-align:center; padding: 50px;">No Aggregated Clusters Available</p>';
+                return;
+            }
 
-  async function loadClusters() {
-    const sortBy = sortSelect ? sortSelect.value : 'size';
-    showLoading();
-    try {
-      const url = `${API_LATEST}?sort_by=${encodeURIComponent(sortBy)}&desc=1&limit=200`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      renderClusters(data);
-    } catch (e) {
-      console.error(e);
-      showError(String(e));
-    }
-  }
+            // 生成聚类 HTML
+            let html = '';
+            clusters.forEach(cluster => {
+                const doc = cluster.repr_doc;
+                // 利用重构后的 generateArticleCardHtml 单独生成代表文章的卡片
+                const reprCardHtml = renderer.generateArticleCardHtml(doc);
 
-  function renderClusters(payload) {
-    const clusters = payload?.clusters || [];
-    if (!clusters.length) {
-      container.innerHTML = `<p style="text-align:center; padding: 50px;">NO Clusters</p>`;
-      return;
-    }
+                // 只有 size > 1 时才显示展开按钮
+                const toggleBtn = cluster.size > 1
+                    ? `<button class="cluster-toggle-btn" data-cluster-id="${cluster.cluster_id}">
+                         <i class="bi bi-chevron-down"></i> Expand (${cluster.size - 1} related)
+                       </button>`
+                    : '';
 
-    const version = payload?.version || '';
-    const headerHtml = version
-      ? `<div class="cluster-header-hint">Version: <span class="version-badge">${escapeHTML(version)}</span></div>`
-      : '';
+                html += `
+                <div class="cluster-container" data-cluster-id="${cluster.cluster_id}">
+                    <div class="cluster-badge"><i class="bi bi-diagram-3"></i> Cluster ID: ${cluster.cluster_id} • Total: ${cluster.size}</div>
+                    <div class="cluster-header">
+                        ${toggleBtn}
+                        ${reprCardHtml}
+                    </div>
+                    <div class="cluster-members" id="members-${cluster.cluster_id}">
+                        </div>
+                </div>`;
+            });
 
-    const html = clusters.map(c => {
-      const clusterId = c.cluster_id;
-      const size = c.size || 0;
-      const uuid = c.repr_uuid || '';
-      const title = c.repr_title || '(No Title)';
-      const brief = c.repr_brief || '';
-      const href = c.href || (uuid ? `/intelligence/${uuid}` : '#');
+            listContainer.innerHTML = html;
 
-      return `
-        <div class="article-card cluster-card" data-cluster-id="${escapeHTML(clusterId)}">
-          <h3>
-            <a href="${href}" class="article-title" data-uuid="${escapeHTML(uuid)}">
-              ${escapeHTML(title)}
-            </a>
-          </h3>
+            // 触发来源图标渲染和时间颜色更新
+            renderer.enhanceSourceLinks();
+            renderer.updateTimeBackgrounds();
 
-          <div class="article-meta">
-            <span class="article-time">Cluster: ${escapeHTML(clusterId)}</span>
-            <span class="article-time">Size: ${size}</span>
-            ${version ? `<span class="version-badge">${escapeHTML(version)}</span>` : ''}
-            <button class="cluster-toggle" type="button" data-cluster-id="${escapeHTML(clusterId)}">
-              Expand
-            </button>
-          </div>
-
-          ${brief ? `<p class="article-summary">${escapeHTML(brief)}</p>` : ''}
-
-          <div class="cluster-children" id="children-${escapeHTML(clusterId)}" style="display:none;">
-            <div class="cluster-children-loading">Loading...</div>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    container.innerHTML = headerHtml + html;
-  }
-
-  // Expand/Collapse handler (event delegation)
-  document.body.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.cluster-toggle');
-    if (!btn) return;
-
-    const clusterId = btn.dataset.clusterId;
-    const box = document.getElementById(`children-${clusterId}`);
-    if (!box) return;
-
-    const isOpen = box.style.display !== 'none';
-    if (isOpen) {
-      box.style.display = 'none';
-      btn.textContent = 'Expand';
-      return;
-    }
-
-    // open
-    box.style.display = 'block';
-    btn.textContent = 'Collapse';
-
-    // lazy load once
-    if (box.dataset.loaded === '1') return;
-
-    try {
-      box.innerHTML = `<div class="cluster-children-loading">Loading members...</div>`;
-      const resp = await fetch(`${API_MEMBERS(clusterId)}?limit=120&offset=0`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-
-      const items = data.items || [];
-      if (!items.length) {
-        box.innerHTML = `<div style="color:#666;">No members</div>`;
-        box.dataset.loaded = '1';
-        return;
-      }
-
-      // render children list (each link uses article-title + data-uuid to reuse modal)
-      box.innerHTML = `
-        <div class="cluster-children-list">
-          ${items.map(it => `
-            <div class="cluster-child-item">
-              <a href="${it.href}" class="article-title cluster-child-title" data-uuid="${escapeHTML(it.uuid)}">
-                ${escapeHTML(it.title)}
-              </a>
-            </div>
-          `).join('')}
-        </div>
-      `;
-      box.dataset.loaded = '1';
-    } catch (err) {
-      console.error(err);
-      box.innerHTML = `<div style="color:#c00;">Load members failed: ${escapeHTML(String(err))}</div>`;
-    }
-  });
-
-  if (refreshBtn) refreshBtn.addEventListener('click', loadClusters);
-  if (sortSelect) sortSelect.addEventListener('change', loadClusters);
-
-  loadClusters();
-
-  // ----------------------------
-  // 复用你现有的 Article Detail Modal 管理器（直接拷贝）
-  // ----------------------------
-  (function initArticleDetailModal() {
-    const overlay = document.getElementById('article-detail-overlay');
-    const bodyEl = document.getElementById('article-modal-body');
-    const titleEl = document.getElementById('article-modal-title');
-    const uuidEl = document.getElementById('article-modal-uuid');
-    const closeBtn = document.getElementById('article-close-btn');
-    const copyBtn = document.getElementById('article-copy-link-btn');
-    const openNewBtn = document.getElementById('article-open-newtab-btn');
-
-    if (!overlay || !bodyEl || !titleEl || !uuidEl || !closeBtn || !copyBtn || !openNewBtn) return;
-
-    let lastFocus = null;
-    let isOpen = false;
-    let pushedState = false;
-
-    async function openByUuid(uuid) {
-      const pageUrl = `/intelligence/${encodeURIComponent(uuid)}`;
-      await open(pageUrl, uuid, 'Detail');
-    }
-
-    async function open(pageUrl, uuid, titleFallback) {
-      overlay.style.display = 'flex';
-      overlay.setAttribute('aria-hidden', 'false');
-      document.body.classList.add('body-scroll-locked');
-      titleEl.textContent = 'Loading...';
-      uuidEl.textContent = uuid ? `UUID: ${uuid}` : '';
-      bodyEl.innerHTML = `<div class="article-modal-loading"><i class="bi bi-arrow-repeat article-spinner"></i> Loading...</div>`;
-      openNewBtn.onclick = () => window.open(pageUrl, '_blank', 'noopener');
-
-      lastFocus = document.activeElement;
-      closeBtn.focus();
-
-      if (location.pathname !== pageUrl) {
-        history.pushState({ modal: 'article', url: pageUrl }, '', pageUrl);
-        pushedState = true;
-      }
-      isOpen = true;
-
-      try {
-        const resp = await fetch(`/api/intelligence/${encodeURIComponent(uuid)}`);
-        if (resp.status === 401) {
-          bodyEl.innerHTML = `<div style="color:#c00;">You are not authorized.</div>`;
-          return;
+        } catch (error) {
+            console.error('Load Error:', error);
+            renderer.showError(error.message);
         }
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const payload = await resp.json();
-        const article = payload?.data || payload;
+    }
 
-        titleEl.textContent = article?.EVENT_TITLE || titleFallback || 'Detail';
-        bodyEl.innerHTML = ArticleDetailRenderer.generateHTML(article);
-        ArticleDetailRenderer.bindEvents(bodyEl, uuid, 'article-toast-container');
+    // 处理展开/收起事件 (事件委托)
+    listContainer.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.cluster-toggle-btn');
+        if (!btn) return;
 
-        bodyEl.querySelectorAll('a[href^="/intelligence/"]').forEach(a => {
-          a.addEventListener('click', (e) => {
-            if (a.target === '_blank' || e.button !== 0 || e.metaKey || e.ctrlKey) return;
+        const clusterId = btn.getAttribute('data-cluster-id');
+        const membersDiv = document.getElementById(`members-${clusterId}`);
+        const icon = btn.querySelector('i');
+
+        // Toggle 逻辑
+        if (membersDiv.classList.contains('expanded')) {
+            membersDiv.classList.remove('expanded');
+            icon.classList.replace('bi-chevron-up', 'bi-chevron-down');
+            btn.innerHTML = `<i class="bi bi-chevron-down"></i> Expand`;
+            return;
+        }
+
+        membersDiv.classList.add('expanded');
+        icon.classList.replace('bi-chevron-down', 'bi-chevron-up');
+        btn.innerHTML = `<i class="bi bi-chevron-up"></i> Collapse`;
+
+        // 如果已经加载过，直接返回
+        if (membersDiv.innerHTML.trim() !== '') return;
+
+        membersDiv.innerHTML = `<div class="loading-spinner"><i class="bi bi-arrow-repeat article-spinner"></i> Loading members...</div>`;
+
+        // 动态加载子成员
+        try {
+            // 请求上限 500 (如果超出可通过 API 增加 offset 机制，这里简写全拉)
+            const resp = await fetch(`/api/clusters/${clusterId}/members?limit=500`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+            const data = await resp.json();
+            const items = data.items || [];
+
+            // 去除代表文章本身（通常是列表第一条，或者依靠 uuid 过滤）
+            // 因为代表文章已经在 cluster-header 里显示过了
+            const containerEl = btn.closest('.cluster-container');
+            const reprUuid = containerEl.querySelector('.article-title').getAttribute('data-uuid');
+
+            const filteredItems = items.filter(item => item.uuid !== reprUuid);
+
+            if (filteredItems.length === 0) {
+                membersDiv.innerHTML = '<p style="color:#666; font-size: 0.9em;">No other members in this cluster.</p>';
+                return;
+            }
+
+            // 渲染子文章
+            const membersHtml = filteredItems.map(item => renderer.generateArticleCardHtml(item.doc)).join('');
+            membersDiv.innerHTML = membersHtml;
+
+            renderer.enhanceSourceLinks();
+            renderer.updateTimeBackgrounds();
+
+        } catch (err) {
+            membersDiv.innerHTML = `<div style="color:red;">Error loading members: ${err.message}</div>`;
+        }
+    });
+
+    if (refreshBtn) refreshBtn.addEventListener('click', loadClusters);
+    if (limitSelect) limitSelect.addEventListener('change', loadClusters);
+
+    // 初始加载
+    loadClusters();
+
+    // ==========================================
+    // 复用原有的 Modal 逻辑，拦截文章点击
+    // ==========================================
+    (function initArticleDetailModal() {
+        const overlay = document.getElementById('article-detail-overlay');
+        const bodyEl = document.getElementById('article-modal-body');
+        const titleEl = document.getElementById('article-modal-title');
+        const uuidEl = document.getElementById('article-modal-uuid');
+        const closeBtn = document.getElementById('article-close-btn');
+        const copyBtn = document.getElementById('article-copy-link-btn');
+        const openNewBtn = document.getElementById('article-open-newtab-btn');
+
+        if (!overlay) return;
+        let isOpen = false;
+
+        async function open(pageUrl, uuid, titleFallback) {
+            overlay.style.display = 'flex';
+            document.body.classList.add('body-scroll-locked');
+            titleEl.textContent = 'Loading...';
+            uuidEl.textContent = uuid ? `UUID: ${uuid}` : '';
+            bodyEl.innerHTML = `<div class="article-modal-loading"><i class="bi bi-arrow-repeat article-spinner"></i> Loading...</div>`;
+            openNewBtn.onclick = () => window.open(pageUrl, '_blank', 'noopener');
+            isOpen = true;
+
+            try {
+                const resp = await fetch(`/api/intelligence/${encodeURIComponent(uuid)}`);
+                if (resp.status === 401) {
+                    bodyEl.innerHTML = `<div style="color:#c00;">You are not authorized.</div>`;
+                    return;
+                }
+                const payload = await resp.json();
+                const article = payload?.data || payload;
+
+                titleEl.textContent = article?.EVENT_TITLE || titleFallback || 'Detail';
+                bodyEl.innerHTML = ArticleDetailRenderer.generateHTML(article);
+                ArticleDetailRenderer.bindEvents(bodyEl, uuid, 'article-toast-container');
+
+                copyBtn.onclick = async () => {
+                    try {
+                        await navigator.clipboard.writeText(location.origin + pageUrl);
+                        ArticleDetailRenderer.showToast('article-toast-container', 'Link copied!', 'success');
+                    } catch {
+                        ArticleDetailRenderer.showToast('article-toast-container', 'Copy failed', 'danger');
+                    }
+                };
+            } catch (err) {
+                titleEl.textContent = 'Load Failed';
+                bodyEl.innerHTML = `<div style="color:#c00;">Failed to load: ${String(err)}</div>`;
+            }
+        }
+
+        function close() {
+            if (!isOpen) return;
+            overlay.style.display = 'none';
+            document.body.classList.remove('body-scroll-locked');
+            bodyEl.innerHTML = '';
+            isOpen = false;
+        }
+
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        closeBtn.addEventListener('click', () => close());
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
+
+        document.addEventListener('click', async (e) => {
+            const a = e.target.closest('a.article-title[data-uuid]');
+            if (!a) return;
+            if (e.button !== 0 || e.metaKey || e.ctrlKey) return;
             e.preventDefault();
-            const nextUuid = (a.href.match(/\/intelligence\/([^/?#]+)/i) || [,''])[1];
-            if (nextUuid) openByUuid(nextUuid);
-          });
+            const uuid = a.dataset.uuid;
+            if (uuid) await open(`/intelligence/${uuid}`, uuid, a.textContent?.trim());
         });
-
-        copyBtn.onclick = async () => {
-          try {
-            await navigator.clipboard.writeText(location.origin + pageUrl);
-            ArticleDetailRenderer.showToast('article-toast-container', 'Link copied!', 'success');
-          } catch {
-            ArticleDetailRenderer.showToast('article-toast-container', 'Copy failed', 'danger');
-          }
-        };
-      } catch (err) {
-        titleEl.textContent = 'Load Failed';
-        bodyEl.innerHTML = `<div style="color:#c00;">Failed to load: ${String(err)}</div>`;
-      }
-    }
-
-    function close({ fromHistory } = { fromHistory: false }) {
-      if (!isOpen) return;
-      overlay.style.display = 'none';
-      overlay.setAttribute('aria-hidden', 'true');
-      document.body.classList.remove('body-scroll-locked');
-      bodyEl.innerHTML = '';
-      isOpen = false;
-
-      if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
-
-      if (!fromHistory && pushedState) {
-        window._preventListReload = true;
-        history.back();
-      }
-      pushedState = false;
-    }
-
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    closeBtn.addEventListener('click', () => close());
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
-
-    document.addEventListener('click', async (e) => {
-      const a = e.target.closest('a.article-title[data-uuid]');
-      if (!a) return;
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      e.preventDefault();
-      const uuid = a.dataset.uuid;
-      if (uuid) await open(`/intelligence/${uuid}`, uuid, a.textContent?.trim() || 'Detail');
-    });
-
-    window.addEventListener('popstate', () => {
-      if (isOpen) {
-        window._preventListReload = true;
-        close({ fromHistory: true });
-      }
-    });
-  })();
+    })();
 });

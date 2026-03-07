@@ -1,3 +1,5 @@
+# IntelligenceHubWebService.py
+
 import re
 import json
 import logging
@@ -629,11 +631,6 @@ class IntelligenceHubWebService:
         def api_clusters_latest():
             """
             Return latest offline clusters summary with repr article titles (joined from Mongo archive).
-            Query params:
-              - plan_id (optional): default agg_intelligence_summary_24h
-              - limit (optional): default 200
-              - sort_by (optional): size|last_seen|cluster_id
-              - desc (optional): 1/0
             """
             try:
                 plan_id = request.args.get("plan_id", "agg_intelligence_summary_24h")
@@ -669,13 +666,17 @@ class IntelligenceHubWebService:
 
                 repr_map = {d.get("UUID"): d for d in (repr_docs or []) if isinstance(d, dict)}
 
-                # 3) attach title + href
+                # 3) attach title + href + full doc
                 out_clusters = []
                 for c in clusters:
                     uuid = c.get("repr_doc_id")
                     doc = repr_map.get(uuid) or {}
                     title = doc.get("EVENT_TITLE") or doc.get("title") or "(No Title)"
                     brief = doc.get("EVENT_BRIEF") or ""
+
+                    # 【新增】清洗并包含完整的数据对象，以便前端复用卡片渲染
+                    cleaned_docs = exclude_raw_data([doc]) if doc.get('UUID') else []
+                    cleaned_doc = cleaned_docs[0] if cleaned_docs else {}
 
                     out_clusters.append({
                         "cluster_id": c.get("cluster_id"),
@@ -685,6 +686,7 @@ class IntelligenceHubWebService:
                         "repr_title": title,
                         "repr_brief": brief,
                         "href": f"/intelligence/{uuid}" if uuid else "#",
+                        "repr_doc": cleaned_doc  # 【新增字段】
                     })
 
                 # keep original metadata
@@ -708,11 +710,7 @@ class IntelligenceHubWebService:
         @app.get("/api/clusters/<cluster_id>/members")
         def api_cluster_members(cluster_id: str):
             """
-            返回某个 cluster 的成员子情报（仅标题+链接），从最新离线聚合里取 members，再从 Mongo 补齐标题。
-            Query params:
-              - plan_id: 默认 agg_intelligence_summary_24h
-              - limit: 默认 100（上限 500）
-              - offset: 默认 0
+            返回某个 cluster 的成员子情报，从最新离线聚合里取 members，再从 Mongo 补齐。
             """
             try:
                 plan_id = request.args.get("plan_id", "agg_intelligence_summary_24h")
@@ -744,17 +742,23 @@ class IntelligenceHubWebService:
                 # 保持 members 原顺序
                 rank = {u: i for i, u in enumerate(sub)}
                 items = []
-                for d in (docs or []):
-                    if not isinstance(d, dict):
-                        continue
-                    uid = d.get("UUID")
+
+                # 【新增】批量清洗文档
+                cleaned_docs = exclude_raw_data([d for d in docs if isinstance(d, dict)])
+                cleaned_map = {d.get("UUID"): d for d in cleaned_docs}
+
+                for uid in sub:
                     if uid not in rank:
                         continue
-                    title = d.get("EVENT_TITLE") or d.get("title") or "(No Title)"
+
+                    cleaned_doc = cleaned_map.get(uid, {})
+                    title = cleaned_doc.get("EVENT_TITLE") or cleaned_doc.get("title") or "(No Title)"
+
                     items.append({
                         "uuid": uid,
                         "title": title,
-                        "href": f"/intelligence/{uid}"
+                        "href": f"/intelligence/{uid}",
+                        "doc": cleaned_doc  # 【新增字段】
                     })
 
                 items.sort(key=lambda x: rank.get(x["uuid"], 10 ** 9))

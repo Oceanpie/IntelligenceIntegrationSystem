@@ -75,7 +75,156 @@ class ArticleRenderer {
         return `${y}-${m}-${d} ${h}:${min}`;
     }
 
-    // --- 文章列表渲染 ---
+    // --- 【新增】文章卡片 HTML 生成方法 ---
+    generateArticleCardHtml(article) {
+        if (!article) return '';
+
+        // 1. 获取 Appendix (防止 undefined)
+        const appendix = article.APPENDIX || {};
+
+        // 1.2 ID 获取
+        const uuid = this.escapeHTML(article.UUID || "Unknown-UUID");
+        const intelUrl = `/intelligence/${uuid}`;
+
+        // 1.3 来源获取 (兼容 v2:INFORMANT, v1:informant, source)
+        const informant_val = article.INFORMANT || article.informant || article.source || "";
+        const informant = this.escapeHTML(informant_val);
+        const informant_html = this.isValidUrl(informant)
+            ? `<a href="${informant}" target="_blank" class="source-link">${informant}</a>`
+            : (informant || 'Unknown Source');
+
+        // 1.4 发布时间获取 (兼容 v2:APPENDIX, v1:PUB_TIME, 采集时间兜底)
+        const pub_time_raw = appendix['__TIME_PUB__'] || article.PUB_TIME || article.pub_time || article.collect_time;
+        const pub_time_display = this.formatLocalTime(pub_time_raw);
+
+        // 1.5 归档时间获取 (用于背景变色，必须在顶部定义)
+        const raw_archived_time = appendix['__TIME_ARCHIVED__'] || '';
+        const archived_time_display = this.formatLocalTime(raw_archived_time);
+
+        // 生成归档时间 HTML 片段
+        let archived_html = "";
+        if (raw_archived_time) {
+            archived_html = `<span class="article-time archived-time" data-archived="${this.escapeHTML(raw_archived_time)}">Archived: ${archived_time_display}</span>`;
+        }
+
+        // 1.6 向量评分 (Vector Score)
+        const vector_score = appendix['__VECTOR_SCORE__'];
+        let vector_score_html = "";
+        if (vector_score !== undefined && vector_score !== null) {
+            const formattedScore = parseFloat(vector_score).toFixed(3);
+            let badgeClass = vector_score >= 0.8 ? 'bg-success' :
+                             (vector_score >= 0.6 ? 'bg-primary' :
+                             (vector_score >= 0.4 ? 'bg-warning' : 'bg-danger'));
+            vector_score_html = `<span class="badge ${badgeClass} similarity-badge"><span class="similarity-score">${formattedScore}</span></span>`;
+        }
+
+        // 1.7 AI 服务信息
+        const ai_service = this.escapeHTML(appendix['__AI_SERVICE__'] || '');
+        const ai_model = this.escapeHTML(appendix['__AI_MODEL__'] || '');
+
+        // 2. 版本逻辑分支 (V1 vs V2) - 生成 left_content
+        const prompt_version = appendix['__PROMPT_VERSION__'];
+        const is_v2 = prompt_version && !isNaN(Number(prompt_version)) && Number(prompt_version) >= 20;
+
+        let left_content = "";
+
+        if (is_v2) {
+            const taxonomy = this.escapeHTML(article.TAXONOMY || "Unclassified");
+            const sub_categories = article.SUB_CATEGORY || [];
+            const total_score = appendix['__TOTAL_SCORE__'];
+
+            let tags_html = "";
+            if (Array.isArray(sub_categories) && sub_categories.length > 0) {
+                tags_html = sub_categories.map(tag => `<span class="v2-category-tag">${this.escapeHTML(tag)}</span>`).join('');
+            }
+
+            const category_line = `<div style="margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                <span class="debug-label" style="color:#1a73e8; font-size:0.95rem;">${taxonomy}</span>
+                ${tags_html}
+            </div>`;
+
+            let total_score_html = "";
+            if (total_score !== undefined && total_score !== null) {
+                total_score_html = `
+                <div class="article-rating" style="margin: 6px 0 4px 0;">
+                    <span class="debug-label">总分:</span>
+                    ${this.createRatingStars(total_score)}
+                </div>`;
+            }
+
+            left_content = `
+            ${category_line}
+            ${total_score_html}
+            <div>
+                <span class="debug-label">UUID:</span> ${uuid}
+            </div>`;
+
+        } else {
+            const max_rate_class = this.escapeHTML(appendix['__MAX_RATE_CLASS__'] || '');
+            const max_rate_score = appendix['__MAX_RATE_SCORE__'];
+
+            if (max_rate_class && max_rate_score !== null) {
+                left_content += `
+                <div class="article-rating" style="margin-bottom: 4px;">
+                    <span class="debug-label">${max_rate_class}:</span>
+                    ${this.createRatingStars(max_rate_score)}
+                </div>`;
+            }
+
+            left_content += `
+            <div>
+                <span class="debug-label">UUID:</span> ${uuid}
+            </div>`;
+        }
+
+        // 3. 构建右侧调试信息 (right_content)
+        let right_content = "";
+        if (ai_service || ai_model) {
+            if (ai_service) right_content += `<div><span class="debug-label">Service:</span><span class="debug-value-truncate" title="${ai_service}">${ai_service}</span></div>`;
+            if (ai_model) right_content += `<div><span class="debug-label">Model:</span><span class="debug-value-truncate" title="${ai_model}">${ai_model}</span></div>`;
+        }
+
+        if (is_v2 && prompt_version) {
+            const pvEscaped = this.escapeHTML(prompt_version);
+            right_content += `
+              <div>
+                <span class="debug-label">Prompt:</span>
+                <button
+                  type="button"
+                  class="prompt-link-btn"
+                  data-prompt-version="${pvEscaped}"
+                  title="Click to view prompt v${pvEscaped}"
+                >v${pvEscaped}</button>
+              </div>`;
+        }
+
+        // 4. 返回最终 HTML
+        return `
+        <div class="article-card">
+            <h3>
+              <a href="${intelUrl}" class="article-title" data-uuid="${uuid}">
+                ${this.escapeHTML(article.EVENT_TITLE || article.title || "No Title")}
+              </a>
+            </h3>
+            <div class="article-meta">
+                ${archived_html}
+                <span class="article-time">Publish: ${pub_time_display}</span>
+                ${vector_score_html}
+                <span class="article-source">Source: ${informant_html}</span>
+            </div>
+            <p class="article-summary">${this.escapeHTML(article.EVENT_BRIEF || "No Brief")}</p>
+
+            <div class="debug-info">
+                <div class="debug-left">
+                    ${left_content}
+                </div>
+                <div class="debug-right">
+                    ${right_content}
+                </div>
+            </div>
+        </div>`;
+    }
+
     renderArticles(articles) {
         if (!this.listContainer) return;
 
@@ -84,174 +233,7 @@ class ArticleRenderer {
             return;
         }
 
-        const html = articles.map(article => {
-            // ============================================================
-            // 1. 统一变量定义 (防止 ReferenceError)
-            // ============================================================
-
-            // 1.1 获取 Appendix (防止 undefined)
-            const appendix = article.APPENDIX || {};
-
-            // 1.2 ID 获取
-            const uuid = this.escapeHTML(article.UUID || "Unknown-UUID");
-            const intelUrl = `/intelligence/${uuid}`;
-
-            // 1.3 来源获取 (兼容 v2:INFORMANT, v1:informant, source)
-            const informant_val = article.INFORMANT || article.informant || article.source || "";
-            const informant = this.escapeHTML(informant_val);
-            const informant_html = this.isValidUrl(informant)
-                ? `<a href="${informant}" target="_blank" class="source-link">${informant}</a>`
-                : (informant || 'Unknown Source');
-
-            // 1.4 发布时间获取 (兼容 v2:APPENDIX, v1:PUB_TIME, 采集时间兜底)
-            // 顺序: Appendix -> Root PUB_TIME -> Root pub_time -> Root collect_time
-            const pub_time_raw = appendix['__TIME_PUB__'] || article.PUB_TIME || article.pub_time || article.collect_time;
-            const pub_time_display = this.formatLocalTime(pub_time_raw);
-
-            // 1.5 归档时间获取 (用于背景变色，必须在顶部定义)
-            const raw_archived_time = appendix['__TIME_ARCHIVED__'] || '';
-            const archived_time_display = this.formatLocalTime(raw_archived_time);
-
-            // 生成归档时间 HTML 片段
-            let archived_html = "";
-            if (raw_archived_time) {
-                // 注意：这里用到了 raw_archived_time，所以它必须在上面定义
-                archived_html = `<span class="article-time archived-time" data-archived="${this.escapeHTML(raw_archived_time)}">Archived: ${archived_time_display}</span>`;
-            }
-
-            // 1.6 向量评分 (Vector Score)
-            const vector_score = appendix['__VECTOR_SCORE__'];
-            let vector_score_html = "";
-            if (vector_score !== undefined && vector_score !== null) {
-                const formattedScore = parseFloat(vector_score).toFixed(3);
-                let badgeClass = vector_score >= 0.8 ? 'bg-success' :
-                                 (vector_score >= 0.6 ? 'bg-primary' :
-                                 (vector_score >= 0.4 ? 'bg-warning' : 'bg-danger'));
-                vector_score_html = `<span class="badge ${badgeClass} similarity-badge"><span class="similarity-score">${formattedScore}</span></span>`;
-            }
-
-            // 1.7 AI 服务信息
-            const ai_service = this.escapeHTML(appendix['__AI_SERVICE__'] || '');
-            const ai_model = this.escapeHTML(appendix['__AI_MODEL__'] || '');
-
-            // ============================================================
-            // 2. 版本逻辑分支 (V1 vs V2) - 生成 left_content
-            // ============================================================
-
-            const prompt_version = appendix['__PROMPT_VERSION__'];
-            // 判断是否为 v2 (存在版本号 且 >= 20)
-            const is_v2 = prompt_version && !isNaN(Number(prompt_version)) && Number(prompt_version) >= 20;
-
-            let left_content = "";
-
-            if (is_v2) {
-                // --- [V2 Logic] ---
-                const taxonomy = this.escapeHTML(article.TAXONOMY || "Unclassified");
-                const sub_categories = article.SUB_CATEGORY || [];
-
-                // 获取总分
-                const total_score = appendix['__TOTAL_SCORE__'];
-
-                // 子分类标签
-                let tags_html = "";
-                if (Array.isArray(sub_categories) && sub_categories.length > 0) {
-                    tags_html = sub_categories.map(tag => `<span class="v2-category-tag">${this.escapeHTML(tag)}</span>`).join('');
-                }
-
-                // 分类和标签放在同一行
-                const category_line = `<div style="margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                    <span class="debug-label" style="color:#1a73e8; font-size:0.95rem;">${taxonomy}</span>
-                    ${tags_html}
-                </div>`;
-
-                // 总分显示（如果有总分的话）
-                let total_score_html = "";
-                if (total_score !== undefined && total_score !== null) {
-                    total_score_html = `
-                    <div class="article-rating" style="margin: 6px 0 4px 0;">
-                        <span class="debug-label">总分:</span>
-                        ${this.createRatingStars(total_score)}
-                    </div>`;
-                }
-
-                left_content = `
-                ${category_line}
-                ${total_score_html}
-                <div>
-                    <span class="debug-label">UUID:</span> ${uuid}
-                </div>`;
-
-            } else {
-                // --- [V1 Logic] ---
-                const max_rate_class = this.escapeHTML(appendix['__MAX_RATE_CLASS__'] || '');
-                const max_rate_score = appendix['__MAX_RATE_SCORE__'];
-
-                if (max_rate_class && max_rate_score !== null) {
-                    left_content += `
-                    <div class="article-rating" style="margin-bottom: 4px;">
-                        <span class="debug-label">${max_rate_class}:</span>
-                        ${this.createRatingStars(max_rate_score)}
-                    </div>`;
-                }
-
-                left_content += `
-                <div>
-                    <span class="debug-label">UUID:</span> ${uuid}
-                </div>`;
-            }
-
-            // ============================================================
-            // 3. 构建右侧调试信息 (right_content)
-            // ============================================================
-            let right_content = "";
-            if (ai_service || ai_model) {
-                if (ai_service) right_content += `<div><span class="debug-label">Service:</span><span class="debug-value-truncate" title="${ai_service}">${ai_service}</span></div>`;
-                if (ai_model) right_content += `<div><span class="debug-label">Model:</span><span class="debug-value-truncate" title="${ai_model}">${ai_model}</span></div>`;
-            }
-
-            if (is_v2 && prompt_version) {
-                const pvEscaped = this.escapeHTML(prompt_version);
-                right_content += `
-                  <div>
-                    <span class="debug-label">Prompt:</span>
-                    <button
-                      type="button"
-                      class="prompt-link-btn"
-                      data-prompt-version="${pvEscaped}"
-                      title="Click to view prompt v${pvEscaped}"
-                    >v${pvEscaped}</button>
-                  </div>`;
-            }
-
-            // ============================================================
-            // 4. 返回最终 HTML
-            // ============================================================
-            return `
-            <div class="article-card">
-                <h3>
-                  <a href="${intelUrl}" class="article-title" data-uuid="${uuid}">
-                    ${this.escapeHTML(article.EVENT_TITLE || article.title || "No Title")}
-                  </a>
-                </h3>
-                <div class="article-meta">
-                    ${archived_html}
-                    <span class="article-time">Publish: ${pub_time_display}</span>
-                    ${vector_score_html}
-                    <span class="article-source">Source: ${informant_html}</span>
-                </div>
-                <p class="article-summary">${this.escapeHTML(article.EVENT_BRIEF || "No Brief")}</p>
-
-                <div class="debug-info">
-                    <div class="debug-left">
-                        ${left_content}
-                    </div>
-                    <div class="debug-right">
-                        ${right_content}
-                    </div>
-                </div>
-            </div>`;
-        }).join('');
-
+        const html = articles.map(article => this.generateArticleCardHtml(article)).join('');
         this.listContainer.innerHTML = html;
     }
 

@@ -13,7 +13,6 @@ from pymongo.errors import ConnectionFailure
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_result
 
 from GlobalConfig import EXPORT_PATH
-from ServiceComponent.IntelligenceAggregationEngine import IntelligenceAggregationEngine, AggregationPlanSpec
 from prompts_v2x import ANALYSIS_PROMPT_TABLE
 from Tools.MongoDBAccess import MongoDBStorage
 from VectorDB.VectorDBClient import VectorDBClient
@@ -27,6 +26,7 @@ from ServiceComponent.IntelligenceQueryEngine import IntelligenceQueryEngine
 from ServiceComponent.IntelligenceScoringEngine import IntelligenceScoringEngine
 from ServiceComponent.IntelligenceVectorDBEngine import IntelligenceVectorDBEngine
 from ServiceComponent.IntelligenceStatisticsEngine import IntelligenceStatisticsEngine
+from ServiceComponent.IntelligenceAggregationEngine import IntelligenceAggregationEngine, AggregationPlanSpec
 from Tools.DateTimeUtility import Clock, time_str_to_datetime, get_aware_time, time_digit_list_to_datetime
 from Tools.ProcessCotrolException import positioning_exception_context, ProcessSkip, PositioningException
 
@@ -872,7 +872,7 @@ class IntelligenceHub:
                     enable_online=True,
                     online_params={"T_event": 0.85, "T_dup": 0.95},
                     persist=True,
-                    time_field="timestamp",
+                    time_field="archived_timestamp",
                 )
 
                 aggregation_engine_summary = IntelligenceAggregationEngine(self.vector_db_client, plan_spec)

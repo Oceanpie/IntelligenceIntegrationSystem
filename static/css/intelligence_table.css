@@ -686,3 +686,96 @@ body {
 
 /* 锁定背景滚动 */
 .body-scroll-locked { overflow: hidden !important; }
+
+/* =========================================
+   11. 聚类/聚合页面专用样式 (Clusters)
+   ========================================= */
+
+.cluster-container {
+    margin-bottom: 30px;
+}
+
+.cluster-header {
+    position: relative;
+}
+
+/* 让簇中心文章显得更特殊一点 */
+.cluster-header .article-card {
+    border-left: 5px solid #1a73e8;
+    background: #fdfdfe;
+    margin-bottom: 0; /* 抵消原有的 margin-bottom，让子列表紧贴 */
+}
+
+.cluster-badge {
+    display: inline-block;
+    background: #e8f0fe;
+    color: #1967d2;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+/* 右侧的展开按钮 */
+.cluster-toggle-btn {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    z-index: 10;
+    background: white;
+    border: 1px solid #1a73e8;
+    color: #1a73e8;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+}
+
+.cluster-toggle-btn:hover {
+    background: #e8f0fe;
+}
+
+/* 子文章列表容器 */
+.cluster-members {
+    margin-left: 40px;
+    padding-left: 20px;
+    border-left: 2px dashed #bbdefb;
+    display: none; /* 默认隐藏 */
+    margin-top: 15px;
+}
+
+.cluster-members.expanded {
+    display: block;
+    animation: fadeIn 0.3s ease;
+}
+
+/* 子文章卡片稍微小一点 */
+.cluster-members .article-card {
+    padding: 15px;
+    margin-bottom: 15px;
+    border: 1px solid #e0e0e0;
+    box-shadow: none;
+}
+
+.cluster-members .article-title {
+    font-size: 1.2rem;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 768px) {
+    .cluster-members {
+        margin-left: 15px;
+        padding-left: 10px;
+    }
+    .cluster-toggle-btn {
+        top: 10px;
+        right: 10px;
+        padding: 4px 8px;
+    }
+}
