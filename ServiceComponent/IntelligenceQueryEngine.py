@@ -399,6 +399,41 @@ class IntelligenceQueryEngine:
             logger.error(f"Error processing request: {str(e)}")
             return -1
 
+    def get_latest_archive_timestamp(self) -> Optional[float]:
+        """
+        获取数据库中最新一条情报的归档时间 (Unix Timestamp)。
+        用于离线聚合时的自动时间发现。
+        """
+        import dateutil.parser  # 确保能解析 ISO 字符串
+
+        collection = self.__mongo_db.collection
+        if collection is None:
+            return None
+
+        try:
+            # 仅投影需要的时间字段，提高查询速度
+            latest_record = collection.find_one(
+                {},
+                projection={f"APPENDIX.{APPENDIX_TIME_ARCHIVED}": 1},
+                sort=[(f"APPENDIX.{APPENDIX_TIME_ARCHIVED}", pymongo.DESCENDING)]
+            )
+
+            if latest_record:
+                raw_time = latest_record.get('APPENDIX', {}).get(APPENDIX_TIME_ARCHIVED)
+                if raw_time:
+                    if isinstance(raw_time, datetime.datetime):
+                        return raw_time.timestamp()
+                    else:
+                        return dateutil.parser.parse(str(raw_time)).timestamp()
+            return None
+
+        except pymongo.errors.PyMongoError as e:
+            logger.error(f"Failed to get latest archive timestamp from MongoDB: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error parsing latest archive timestamp: {e}")
+            return None
+
     @staticmethod
     def build_common_conditions(conditions: Dict[str, Any], operator: str = "$and") -> dict:
         """

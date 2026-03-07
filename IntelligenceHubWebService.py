@@ -911,6 +911,38 @@ class IntelligenceHubWebService:
                 "top_informants": informant_stats
             })
 
+        @app.route('/api/debug/trigger_aggregation', methods=['POST'])
+        @WebServiceAccessManager.login_required
+        def debug_trigger_aggregation():
+            """
+            测试后门：允许手动指定时间范围触发离线聚类
+            Payload: {"start_time": "2026-02-25T00:00:00", "end_time": "2026-02-26T00:00:00"}
+            """
+            data = request.get_json() or {}
+            start_str = data.get('start_time')
+            end_str = data.get('end_time')
+
+            time_range = None
+            if start_str and end_str:
+                start_ts = dateutil.parser.parse(start_str).timestamp()
+                end_ts = dateutil.parser.parse(end_str).timestamp()
+                time_range = (start_ts, end_ts)
+
+            try:
+                # 获取引擎并触发
+                agg_engine = self.intelligence_hub.aggregation_engine_summary
+                if not agg_engine:
+                    return jsonify({"error": "Engine not ready"}), 503
+
+                job_id = agg_engine.trigger_offline(time_range=time_range)
+                return jsonify({
+                    "status": "success",
+                    "job_id": job_id,
+                    "mode": "explicit_time" if time_range else "auto_discovery"
+                })
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         @app.route('/maintenance/export_mongodb', methods=['POST'])
         @WebServiceAccessManager.login_required
         def export_mongodb():

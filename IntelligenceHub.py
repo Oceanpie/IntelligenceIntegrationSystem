@@ -1006,7 +1006,27 @@ class IntelligenceHub:
                 logger.warning("Aggregation engine not ready; skip hourly aggregation.")
                 return
 
-            job_id = self.aggregation_engine_summary.trigger_offline(overrides=None, time_range=None)
+            time_range_to_use = None
+            window_sec = 24 * 3600
+
+            # 1. 委托 QueryEngine 发现最新时间
+            latest_ts = self.archive_db_query_engine.get_latest_archive_timestamp()
+
+            # 2. 判断是否需要回退时间窗口 (兼容老旧测试数据)
+            if latest_ts:
+                now_ts = datetime.datetime.now().timestamp()
+                if (now_ts - latest_ts) >= window_sec:
+                    logger.info(
+                        f"No data in last 24h. Falling back to test data timeline based on timestamp: {latest_ts}")
+                    time_range_to_use = (latest_ts - window_sec, latest_ts)
+
+            # 3. 触发 VectorDB 离线聚合
+            # 如果近期有数据，time_range_to_use 仍为 None，底层自动取 [Now - 24h, Now]
+            job_id = self.aggregation_engine_summary.trigger_offline(
+                overrides=None,
+                time_range=time_range_to_use
+            )
+
             if job_id:
                 logger.info(f"Triggered summary aggregation offline job: {job_id}")
             else:
@@ -1025,6 +1045,21 @@ class IntelligenceHub:
         """
         try:
             if self.aggregation_engine_summary:
+
+                # # ====== 测试专用代码段 ======
+                # import datetime
+                # test_end_dt = datetime.datetime(2026, 2, 26)
+                # test_start_dt = test_end_dt - datetime.timedelta(days=1)
+                #
+                # test_time_range = (test_start_dt.timestamp(), test_end_dt.timestamp())
+                #
+                # # 传入 time_range，VectorDB 就会放弃自动发现，严格执行这个区间
+                # job_id = self.aggregation_engine_summary.trigger_offline(
+                #     overrides=None,
+                #     time_range=test_time_range
+                # )
+                # # =========================
+
                 job_id = self.aggregation_engine_summary.trigger_offline(overrides=None, time_range=None)
                 logger.info(f"[AggregationBootstrap] triggered first offline aggregation job: {job_id}")
         except Exception as e:
