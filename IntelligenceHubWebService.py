@@ -69,20 +69,49 @@ def to_bool(value, default=False):
         return default
 
 
+# def exclude_raw_data(result: List[dict]):
+#     summary_result = []
+#     for data in result:
+#         # In v2, we extract those fields to ArchivedDataExtraFields
+#         _uuid = data.pop('UUID', None)
+#         appendix = data.pop('APPENDIX', None)
+#         informant = data.pop('INFORMANT', None)
+#
+#         # Compatible with v1 analysis result
+#         if 'TAXONOMY' not in data:
+#             data['TAXONOMY'] = 'N/A'
+#
+#         clean_data = ProcessedData.model_validate(data).model_dump(exclude_unset=True, exclude_none=True)
+#
+#         if _uuid: clean_data['UUID'] = _uuid
+#         if appendix: clean_data['APPENDIX'] = appendix
+#         if informant: clean_data['INFORMANT'] = informant
+#
+#         summary_result.append(clean_data)
+#     return summary_result
+
+
+# 获取模型中定义的所有合法字段名集合
+VALID_FIELDS = set(ProcessedData.model_fields.keys())
+
 def exclude_raw_data(result: List[dict]):
     summary_result = []
     for data in result:
-        # In v2, we extract those fields to ArchivedDataExtraFields
         _uuid = data.pop('UUID', None)
         appendix = data.pop('APPENDIX', None)
         informant = data.pop('INFORMANT', None)
 
-        # Compatible with v1 analysis result
         if 'TAXONOMY' not in data:
             data['TAXONOMY'] = 'N/A'
 
-        clean_data = ProcessedData.model_validate(data).model_dump(exclude_unset=True, exclude_none=True)
+        # 核心清洗逻辑：只保留定义在 VALID_FIELDS 中，并且值不为 None 的数据
+        # 这一步完全等价于 model_dump(exclude_unset=True, exclude_none=True) 的清洗效果，且0报错风险
+        clean_data = {
+            k: v for k, v in data.items()
+            if k in VALID_FIELDS and v is not None
+        }
 
+        # 补回前面抽出的特殊字段
         if _uuid: clean_data['UUID'] = _uuid
         if appendix: clean_data['APPENDIX'] = appendix
         if informant: clean_data['INFORMANT'] = informant
