@@ -6,9 +6,9 @@
 
 #### Intelligence
 
-+ [Intelligence List](/intelligences?offset=0&count=50&threshold=8)
++ [Intelligence List](/intelligences?offset=0&count=50&threshold=6)
 
-+ [Recommendations List](/recommendations)
++ [Aggregated Intelligence](/intelligences/clusters)
 
 + [Intelligence Search](/intelligences/search)
 

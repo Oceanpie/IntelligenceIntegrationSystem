@@ -299,6 +299,11 @@ pip install -r requirements_freeze.txt
 # After pip install. Install playwright's headless browser
 playwright install chromium
 
+# Run the Vector DB (Optional)
+python VectorDB/VectorDBBService.py \
+    --db-path D:\Code\IntelligenceIntegrationSystem\_data\VectorDB 
+    --model D:\Code\bge-m3
+
 # Run main service
 python IntelligenceHubLauncher.py
 
