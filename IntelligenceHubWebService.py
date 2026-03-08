@@ -15,17 +15,17 @@ from flask import Flask, request, jsonify, session, redirect, url_for, render_te
 
 from GlobalConfig import *
 from prompts_v2x import ANALYSIS_PROMPT_TABLE as PROMPT_TABLE_V2
-from ServiceComponent.IntelligenceDistributionPageRender import get_intelligence_statistics_page
-from ServiceComponent.IntelligenceHubDefines_v2 import APPENDIX_VECTOR_SCORE
-from ServiceComponent.RateStatisticsPageRender import get_statistics_page
-from ServiceComponent.UserManager import UserManager
 from Tools.CommonPost import common_post
+from Tools.RequestTracer import RequestTracer
+from Tools.DateTimeUtility import get_aware_time, ensure_timezone_aware, time_str_to_datetime
+from ServiceComponent.UserManager import UserManager
 from MyPythonUtility.ArbitraryRPC import RPCService
 from ServiceComponent.RSSPublisher import RSSPublisher, FeedItem
 from ServiceComponent.PostManager import generate_html_from_markdown
+from ServiceComponent.IntelligenceDistributionPageRender import get_intelligence_statistics_page
+from ServiceComponent.IntelligenceHubDefines_v2 import APPENDIX_VECTOR_SCORE, APPENDIX_TOTAL_SCORE
+from ServiceComponent.RateStatisticsPageRender import get_statistics_page
 from IntelligenceHub import CollectedData, IntelligenceHub, ProcessedData, APPENDIX_TIME_ARCHIVED
-from Tools.DateTimeUtility import get_aware_time, ensure_timezone_aware, time_str_to_datetime
-from Tools.RequestTracer import RequestTracer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -664,7 +664,9 @@ class IntelligenceHubWebService:
             try:
                 plan_id = request.args.get("plan_id", "agg_intelligence_summary_24h")
                 limit = int(request.args.get("limit", 200))
-                sort_by = request.args.get("sort_by", "size")
+
+                # 获取客户端期望的排序方式，默认改为按分数 'score'
+                client_sort_by = request.args.get("sort_by", "score")
                 desc = request.args.get("desc", "1") in ("1", "true", "True", "yes", "Y", "y")
 
                 hub = self.intelligence_hub
@@ -673,10 +675,11 @@ class IntelligenceHubWebService:
                 if not agg:
                     return jsonify({"error": "Aggregation engine not configured"}), 501
 
-                # 1) get cluster summaries (repr_doc_id etc.)
+                # 1) get cluster summaries
+                # VectorDB底层没有AI评分字段，所以必须固定按 size(规模) 或 last_seen 挑出最主要的 N 个簇
                 summary = agg.get_latest_clusters_summary(
-                    sort_by=sort_by,
-                    descending=desc,
+                    sort_by="size",
+                    descending=True,
                     limit=limit,
                     include_noise=False
                 )
@@ -715,8 +718,29 @@ class IntelligenceHubWebService:
                         "repr_title": title,
                         "repr_brief": brief,
                         "href": f"/intelligence/{uuid}" if uuid else "#",
-                        "repr_doc": cleaned_doc  # 【新增字段】
+                        "repr_doc": cleaned_doc
                     })
+
+                # ====================================================
+                # 基于补齐后的 MongoDB 数据，对大列表进行二次内存排序
+                # ====================================================
+                if client_sort_by == "score":
+                    # 按代表文章的总分排序
+                    out_clusters.sort(
+                        key=lambda x: float(
+                            x.get("repr_doc", {}).get("APPENDIX", {}).get(APPENDIX_TOTAL_SCORE, 0.0) or 0.0),
+                        reverse=desc
+                    )
+                elif client_sort_by == "time":
+                    # 按代表文章的归档时间排序
+                    out_clusters.sort(
+                        key=lambda x: str(x.get("repr_doc", {}).get("APPENDIX", {}).get(APPENDIX_TIME_ARCHIVED, "")),
+                        reverse=desc
+                    )
+                elif client_sort_by == "size":
+                    # 按簇大小排序
+                    out_clusters.sort(key=lambda x: x.get("size", 0), reverse=desc)
+                # ====================================================
 
                 # keep original metadata
                 return jsonify({
@@ -768,7 +792,7 @@ class IntelligenceHubWebService:
                 if isinstance(docs, dict):
                     docs = [docs]
 
-                # 保持 members 原顺序
+                # 保持 members 原顺序 (即与簇中心的相关度顺序)
                 rank = {u: i for i, u in enumerate(sub)}
                 items = []
 
@@ -787,29 +811,29 @@ class IntelligenceHubWebService:
                         "uuid": uid,
                         "title": title,
                         "href": f"/intelligence/{uid}",
-                        "doc": cleaned_doc  # 【新增字段】
+                        "doc": cleaned_doc
                     })
 
                 # ====================================================
-                # 动态排序逻辑
+                # 动态排序逻辑：默认改为 relevance (相关度)
                 # ====================================================
-                sort_by = request.args.get("sort_by", "score")  # 默认按评分排序
+                sort_by = request.args.get("sort_by", "relevance")
                 desc = request.args.get("desc", "1") in ("1", "true", "True")
 
                 if sort_by == "score":
-                    # 按总分排序
                     items.sort(
                         key=lambda x: float(x["doc"].get("APPENDIX", {}).get("__TOTAL_SCORE__", 0.0) or 0.0),
                         reverse=desc
                     )
                 elif sort_by == "time":
-                    # 按归档时间排序
                     items.sort(
                         key=lambda x: str(x["doc"].get("APPENDIX", {}).get("__TIME_ARCHIVED__", "")),
                         reverse=desc
                     )
                 else:
-                    # 回退到算法原始顺序
+                    # "relevance" 或其他值：回退到算法输出的原始相关度顺序
+                    # rank 越小(即排在 members 数组越前面)，代表离簇中心越近，相关度越高。
+                    # 注意：相关度排列表现最好是从高到低，所以强制使用从小到大升序排，忽略 desc 的翻转指令。
                     items.sort(key=lambda x: rank.get(x["uuid"], 10 ** 9))
                 # ====================================================
 
