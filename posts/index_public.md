@@ -2,7 +2,9 @@
 
 ## 链接
 
-[点此查看情报列表](/intelligences?offset=0&count=20&threshold=6)
+[点此查看完整情报列表](/intelligences?offset=0&count=20&threshold=6)
+
+[24小时情报聚合（测试）](/intelligences/clusters)
 
 > 20260215: 
 > 
