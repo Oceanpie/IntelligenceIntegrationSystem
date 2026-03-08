@@ -22,7 +22,7 @@ class IntelligenceQueryEngine:
     def __init__(self, db: MongoDBStorage):
         self.__mongo_db = db
 
-    def get_intelligence(self, _uuid: Union[str, List[str]]) -> Union[Optional[dict], List[dict]]:
+    def get_intelligence(self, _uuid: Union[str, List[str]], light_weight: bool = False) -> Union[Optional[dict], List[dict]]:
         """Retrieve single intelligence entry by UUID
 
         Args:
@@ -37,6 +37,8 @@ class IntelligenceQueryEngine:
         if not _uuid:
             logger.error("UUID parameter is empty")
             return [] if is_list_input else None
+
+        projection = {"RAW_DATA": 0, "EVENT_TEXT": 0} if light_weight else None
 
         try:
             # Attempt to get database connection
@@ -57,7 +59,7 @@ class IntelligenceQueryEngine:
                 query = {"UUID": {"$in": sanitized_uuids}}
 
                 # 执行查询（find 返回一个游标）
-                cursor = collection.find(query)
+                cursor = collection.find(query, projection=projection)
 
                 # 处理游标中的所有文档
                 results = [self.process_document(doc) for doc in cursor]
@@ -74,7 +76,7 @@ class IntelligenceQueryEngine:
                 query = {"UUID": str(_uuid).lower()}
 
                 # Execute query - get first match
-                doc = collection.find_one(query)
+                doc = collection.find_one(query, projection=projection)
 
                 if doc is None:
                     logger.warning(f"No matching UUID found: {_uuid}")

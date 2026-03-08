@@ -689,7 +689,7 @@ class IntelligenceHubWebService:
                 repr_ids = [c.get("repr_doc_id") for c in clusters if c.get("repr_doc_id")]
                 repr_ids = list(dict.fromkeys(repr_ids))  # unique keep order
 
-                repr_docs = hub.get_intelligence(repr_ids) if repr_ids else []
+                repr_docs = hub.get_intelligence(repr_ids, light_weight=True) if repr_ids else []
                 if isinstance(repr_docs, dict):
                     repr_docs = [repr_docs]
 
@@ -703,7 +703,7 @@ class IntelligenceHubWebService:
                     title = doc.get("EVENT_TITLE") or doc.get("title") or "(No Title)"
                     brief = doc.get("EVENT_BRIEF") or ""
 
-                    # 【新增】清洗并包含完整的数据对象，以便前端复用卡片渲染
+                    # 清洗并包含完整的数据对象，以便前端复用卡片渲染
                     cleaned_docs = exclude_raw_data([doc]) if doc.get('UUID') else []
                     cleaned_doc = cleaned_docs[0] if cleaned_docs else {}
 
@@ -764,7 +764,7 @@ class IntelligenceHubWebService:
                 limit = max(1, min(500, limit))
                 sub = members[offset: offset + limit]
 
-                docs = hub.get_intelligence(sub) if sub else []
+                docs = hub.get_intelligence(sub, light_weight=True) if sub else []
                 if isinstance(docs, dict):
                     docs = [docs]
 
@@ -772,7 +772,7 @@ class IntelligenceHubWebService:
                 rank = {u: i for i, u in enumerate(sub)}
                 items = []
 
-                # 【新增】批量清洗文档
+                # 批量清洗文档
                 cleaned_docs = exclude_raw_data([d for d in docs if isinstance(d, dict)])
                 cleaned_map = {d.get("UUID"): d for d in cleaned_docs}
 
