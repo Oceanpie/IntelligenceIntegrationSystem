@@ -790,7 +790,28 @@ class IntelligenceHubWebService:
                         "doc": cleaned_doc  # 【新增字段】
                     })
 
-                items.sort(key=lambda x: rank.get(x["uuid"], 10 ** 9))
+                # ====================================================
+                # 动态排序逻辑
+                # ====================================================
+                sort_by = request.args.get("sort_by", "score")  # 默认按评分排序
+                desc = request.args.get("desc", "1") in ("1", "true", "True")
+
+                if sort_by == "score":
+                    # 按总分排序
+                    items.sort(
+                        key=lambda x: float(x["doc"].get("APPENDIX", {}).get("__TOTAL_SCORE__", 0.0) or 0.0),
+                        reverse=desc
+                    )
+                elif sort_by == "time":
+                    # 按归档时间排序
+                    items.sort(
+                        key=lambda x: str(x["doc"].get("APPENDIX", {}).get("__TIME_ARCHIVED__", "")),
+                        reverse=desc
+                    )
+                else:
+                    # 回退到算法原始顺序
+                    items.sort(key=lambda x: rank.get(x["uuid"], 10 ** 9))
+                # ====================================================
 
                 return jsonify({
                     "cluster_id": cluster_id,

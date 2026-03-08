@@ -48,6 +48,91 @@ class AggregationPlanSpec:
         }
 
 
+def generate_aggregation_plan(profile: str = "hdbscan_fine") -> AggregationPlanSpec:
+    """
+    Generates an AggregationPlanSpec based on predefined algorithm profiles.
+    This allows easy switching between clustering strategies for testing and tuning.
+
+    Available profiles:
+    - "hdbscan_balanced": Default density-based clustering, favors stable macro-clusters.
+    - "hdbscan_fine": Forces extraction of micro-clusters (leaves) for finer granularity.
+    - "agglomerative_strict": Hard cut-off distance, strict similarity grouping.
+    - "agglomerative_loose": Hard cut-off distance, looser grouping.
+    - "dbscan_standard": Classic DBSCAN, simple density grouping.
+    """
+    # Base configuration shared across all profiles
+    base_config = {
+        "plan_id": "agg_intelligence_summary_24h",
+        "collection_name": "intelligence_summary",
+        "time_window_sec": 24 * 3600,
+        "run_every_sec": 3600,
+        "max_points": 50000,
+        "enable_online": True,
+        "online_params": {"T_event": 0.85, "T_dup": 0.95},
+        "persist": True,
+        "time_field": "timestamp",
+    }
+
+    if profile == "hdbscan_balanced":
+        return AggregationPlanSpec(
+            **base_config,
+            method="hdbscan",
+            params={
+                "min_cluster_size": 3,
+                "min_samples": 2,
+                "cluster_selection_method": "eom"
+            }
+        )
+
+    elif profile == "hdbscan_fine":
+        return AggregationPlanSpec(
+            **base_config,
+            method="hdbscan",
+            params={
+                "min_cluster_size": 2,  # Allow very small clusters
+                "min_samples": 1,  # Less conservative core point definition
+                "cluster_selection_method": "leaf",  # Force fine-grained micro-clusters
+                "cluster_selection_epsilon": 0.0  # Do not merge based on distance
+            }
+        )
+
+    elif profile == "agglomerative_strict":
+        return AggregationPlanSpec(
+            **base_config,
+            method="agglomerative_threshold",
+            params={
+                "distance_threshold": 0.25,  # Max cosine distance to be in same cluster
+                "metric": "cosine",
+                "linkage": "average"
+            }
+        )
+
+    elif profile == "agglomerative_loose":
+        return AggregationPlanSpec(
+            **base_config,
+            method="agglomerative_threshold",
+            params={
+                "distance_threshold": 0.45,  # Allows more variance within the cluster
+                "metric": "cosine",
+                "linkage": "average"
+            }
+        )
+
+    elif profile == "dbscan_standard":
+        return AggregationPlanSpec(
+            **base_config,
+            method="dbscan",
+            params={
+                "eps": 0.25,  # Maximum distance between two samples
+                "min_samples": 2,
+                "metric": "cosine"
+            }
+        )
+
+    else:
+        raise ValueError(f"Unknown aggregation profile: {profile}")
+
+
 class IntelligenceAggregationEngine:
     """
     IIS-side wrapper for VectorDB aggregation APIs.

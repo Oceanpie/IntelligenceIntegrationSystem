@@ -26,7 +26,7 @@ from ServiceComponent.IntelligenceQueryEngine import IntelligenceQueryEngine
 from ServiceComponent.IntelligenceScoringEngine import IntelligenceScoringEngine
 from ServiceComponent.IntelligenceVectorDBEngine import IntelligenceVectorDBEngine
 from ServiceComponent.IntelligenceStatisticsEngine import IntelligenceStatisticsEngine
-from ServiceComponent.IntelligenceAggregationEngine import IntelligenceAggregationEngine, AggregationPlanSpec
+from ServiceComponent.IntelligenceAggregationEngine import IntelligenceAggregationEngine, generate_aggregation_plan
 from Tools.DateTimeUtility import Clock, time_str_to_datetime, get_aware_time, time_digit_list_to_datetime
 from Tools.ProcessCotrolException import positioning_exception_context, ProcessSkip, PositioningException
 
@@ -861,20 +861,7 @@ class IntelligenceHub:
                     chunk_overlap=50
                 )
 
-                plan_spec = AggregationPlanSpec(
-                    plan_id="agg_intelligence_summary_24h",
-                    collection_name="intelligence_summary",
-                    time_window_sec=24 * 3600,
-                    run_every_sec=3600,
-                    method="hdbscan",
-                    params={"min_cluster_size": 3, "min_samples": 2},
-                    max_points=50000,
-                    enable_online=True,
-                    online_params={"T_event": 0.85, "T_dup": 0.95},
-                    persist=True,
-                    time_field="archived_timestamp",
-                )
-
+                plan_spec = generate_aggregation_plan(profile="hdbscan_fine")
                 aggregation_engine_summary = IntelligenceAggregationEngine(self.vector_db_client, plan_spec)
                 aggregation_engine_summary.ensure_plan(overwrite=False)
 
