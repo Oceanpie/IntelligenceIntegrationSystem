@@ -1007,6 +1007,19 @@ class IntelligenceHub:
                         f"No data in last 24h. Falling back to test data timeline based on timestamp: {latest_ts}")
                     time_range_to_use = (latest_ts - window_sec, latest_ts)
 
+            # # ====== 测试专用代码段 ======
+            # test_end_dt = datetime.datetime(2026, 2, 26)
+            # test_start_dt = test_end_dt - datetime.timedelta(days=1)
+            #
+            # test_time_range = (test_start_dt.timestamp(), test_end_dt.timestamp())
+            #
+            # # 传入 time_range，VectorDB 就会放弃自动发现，严格执行这个区间
+            # job_id = self.aggregation_engine_summary.trigger_offline(
+            #     overrides=None,
+            #     time_range=test_time_range
+            # )
+            # # =========================
+
             # 3. 触发 VectorDB 离线聚合
             # 如果近期有数据，time_range_to_use 仍为 None，底层自动取 [Now - 24h, Now]
             job_id = self.aggregation_engine_summary.trigger_offline(
@@ -1024,33 +1037,11 @@ class IntelligenceHub:
 
     def _bootstrap_aggregation_once(self):
         """
-        Bootstrap aggregation after VectorDB is ready:
-          - init aggregation engine (ensure plan)
-          - trigger ONE offline aggregation run at startup
-
-        This method is idempotent (runs only once).
+        Bootstrap aggregation after VectorDB is ready.
+        It simply calls the smart hourly aggregation logic to perform the initial run.
         """
-        try:
-            if self.aggregation_engine_summary:
-
-                # # ====== 测试专用代码段 ======
-                # import datetime
-                # test_end_dt = datetime.datetime(2026, 2, 26)
-                # test_start_dt = test_end_dt - datetime.timedelta(days=1)
-                #
-                # test_time_range = (test_start_dt.timestamp(), test_end_dt.timestamp())
-                #
-                # # 传入 time_range，VectorDB 就会放弃自动发现，严格执行这个区间
-                # job_id = self.aggregation_engine_summary.trigger_offline(
-                #     overrides=None,
-                #     time_range=test_time_range
-                # )
-                # # =========================
-
-                job_id = self.aggregation_engine_summary.trigger_offline(overrides=None, time_range=None)
-                logger.info(f"[AggregationBootstrap] triggered first offline aggregation job: {job_id}")
-        except Exception as e:
-            logger.error(f"Aggregation bootstrap failed: {e}", exc_info=True)
+        logger.info("[AggregationBootstrap] Executing initial offline aggregation...")
+        self._do_run_summary_aggregation()
 
     # def _do_generate_recommendation(self):
     #     now = datetime.datetime.now()

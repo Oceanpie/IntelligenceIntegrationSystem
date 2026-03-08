@@ -27,7 +27,7 @@ class AggregationPlanSpec:
     enable_online: bool = True
     online_params: Dict[str, Any] = None
     persist: bool = True
-    time_field: str = "timestamp"
+    time_field: str = "archived_timestamp"
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -70,7 +70,7 @@ def generate_aggregation_plan(profile: str = "hdbscan_fine") -> AggregationPlanS
         "enable_online": True,
         "online_params": {"T_event": 0.85, "T_dup": 0.95},
         "persist": True,
-        "time_field": "timestamp",
+        "time_field": "archived_timestamp",
     }
 
     if profile == "hdbscan_balanced":
