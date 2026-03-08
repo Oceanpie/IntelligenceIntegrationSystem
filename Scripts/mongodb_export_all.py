@@ -1,5 +1,12 @@
+import os
 import datetime
 from mongodb_exporter import export_mongodb_data
+
+
+self_path = os.path.dirname(os.path.abspath(__file__))
+root_path = os.path.dirname(self_path)
+datestamp = datetime.datetime.now().strftime("%Y%m%d")
+export_path = os.path.join(root_path, '_export', 'manual_export', f"_{datestamp}")
 
 
 if __name__ == "__main__":
@@ -11,7 +18,7 @@ if __name__ == "__main__":
         uri="mongodb://localhost:27017",  # 根据实际情况修改连接字符串
         db="IntelligenceIntegrationSystem",
         collection="intelligence_archived",
-        output_file=f"_export/intelligence_archived_{timestamp}.json",
+        output_file=f"{export_path}/intelligence_archived_{timestamp}.json",
         export_format="json"  # 使用JSON格式确保兼容mongoimport
     )
 
@@ -19,7 +26,7 @@ if __name__ == "__main__":
         uri="mongodb://localhost:27017",  # 根据实际情况修改连接字符串
         db="IntelligenceIntegrationSystem",
         collection="intelligence_cached",
-        output_file=f"_export/intelligence_cached_{timestamp}.json",
+        output_file=f"{export_path}/intelligence_cached_{timestamp}.json",
         export_format="json"  # 使用JSON格式确保兼容mongoimport
     )
 
@@ -27,7 +34,7 @@ if __name__ == "__main__":
         uri="mongodb://localhost:27017",  # 根据实际情况修改连接字符串
         db="IntelligenceIntegrationSystem",
         collection="intelligence_low_value",
-        output_file=f"_export/intelligence_low_value_{timestamp}.json",
+        output_file=f"{export_path}/intelligence_low_value_{timestamp}.json",
         export_format="json"  # 使用JSON格式确保兼容mongoimport
     )
 
