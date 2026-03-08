@@ -306,13 +306,14 @@ class IntelligenceHub:
 
     def get_intelligence(self,
                          _uuid: Union[str, List[str]],
-                         db: str = 'archive'
+                         db: str = 'archive',
+                         light_weight: bool = False
                          ) -> Union[dict, List[dict]]:
         if db == 'cache':
             query_engine = self.cache_db_query_engine
         else:
             query_engine = self.archive_db_query_engine
-        return query_engine.get_intelligence(_uuid)
+        return query_engine.get_intelligence(_uuid, light_weight=light_weight)
 
     def query_intelligence(self,
                            *,

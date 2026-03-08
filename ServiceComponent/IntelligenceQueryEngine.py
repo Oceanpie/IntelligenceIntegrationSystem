@@ -27,6 +27,7 @@ class IntelligenceQueryEngine:
 
         Args:
             _uuid (Union[str, List[str]]): UUID string or string list to query
+            light_weight (bool): Light-weight or full data.
 
         Returns:
             Union[Optional[dict], List[dict]]:
