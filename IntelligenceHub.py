@@ -26,6 +26,7 @@ from ServiceComponent.IntelligenceQueryEngine import IntelligenceQueryEngine
 from ServiceComponent.IntelligenceScoringEngine import IntelligenceScoringEngine
 from ServiceComponent.IntelligenceVectorDBEngine import IntelligenceVectorDBEngine
 from ServiceComponent.IntelligenceStatisticsEngine import IntelligenceStatisticsEngine
+from ServiceComponent.AsyncTranslationPatch import AsyncTranslationPatch, needs_translation
 from ServiceComponent.IntelligenceAggregationEngine import IntelligenceAggregationEngine, generate_aggregation_plan
 from Tools.DateTimeUtility import Clock, time_str_to_datetime, get_aware_time, time_digit_list_to_datetime
 from Tools.ProcessCotrolException import positioning_exception_context, ProcessSkip, PositioningException
@@ -140,6 +141,21 @@ class IntelligenceHub:
         self._init_scheduler()
         # self._trigger_generate_recommendation()
 
+        # ------------ Translation Patch ------------
+
+        self.async_translation_patch = AsyncTranslationPatch(
+            mongo_db_archive=self.mongo_db_archive,
+            query_engine=self.archive_db_query_engine,
+            ai_client_manager=ai_client_manager,
+            shutdown_flag=self.shutdown_flag,
+            on_patched=self._index_archived_data,  # 翻译后再触发 vectorize
+            translated_revision="tr_patch_20260311",
+            backfill_enabled=True,
+            backfill_scan_limit_per_round=200,
+            backfill_interval_sec=3600
+        )
+        self.async_translation_patch.start()
+
         logger.info('***** IntelligenceHub init complete *****')
 
     # ----------------------------------------------------- Setups -----------------------------------------------------
@@ -167,6 +183,13 @@ class IntelligenceHub:
             task_id="summary_aggregation_hourly",
             use_new_thread=True
         )
+
+        self.scheduler.add_hourly_task(
+            func=self._do_translation_backfill,
+            task_id="translation_backfill_hourly",
+            use_new_thread=True
+        )
+
         self.scheduler.start_scheduler()
 
     def _load_unarchived_data(self):
@@ -720,8 +743,19 @@ class IntelligenceHub:
 
                 # TODO: Call post processor plugins
 
-                self._index_archived_data(data)
+                # self._index_archived_data(data)
                 # self._publish_article_to_rss(data)
+
+                try:
+                    if self.async_translation_patch and needs_translation(data):
+                        # 新数据：高优先级异步翻译；先不向量化（等待翻译线程完成后 on_patched 再向量化）
+                        self.async_translation_patch.enqueue_new(data["UUID"], reason="new_archived")
+                    else:
+                        # 原生中文：直接向量化
+                        self._index_archived_data(data)
+                except Exception as e:
+                    logger.warning("AsyncTranslationPatch enqueue fail, fallback vectorize: %s", e)
+                    self._index_archived_data(data)
 
             except queue.Empty:
                 continue
@@ -1206,15 +1240,25 @@ class IntelligenceHub:
         except Exception as e:
             logger.error(f'Mark archived data flag fail: {str(e)}')
 
-    def _add_item_link(self, parent_item_uuid: str, child_item_uuid):
-        try:
-            if self.mongo_db_archive:
-                self.mongo_db_archive.update({
-                    'UUID': parent_item_uuid},
-                    {"$push": {"APPENDIX.__PARENT_ITEM__": child_item_uuid}}
-                )
-        except Exception as e:
-            logger.error(f'Add item link fail: {str(e)}')
+    # def _add_item_link(self, parent_item_uuid: str, child_item_uuid):
+    #     try:
+    #         if self.mongo_db_archive:
+    #             self.mongo_db_archive.update({
+    #                 'UUID': parent_item_uuid},
+    #                 {"$push": {"APPENDIX.__PARENT_ITEM__": child_item_uuid}}
+    #             )
+    #     except Exception as e:
+    #         logger.error(f'Add item link fail: {str(e)}')
+    #
+    # def _aggressive_intelligence(self, article: dict):
+    #     pass
 
-    def _aggressive_intelligence(self, article: dict):
-        pass
+    def _do_translation_backfill(self):
+        try:
+            if not getattr(self, "translation_patch", None):
+                return
+            report = self.translation_patch.backfill_archived(limit=120, batch_size=8)
+            if report.get("patched", 0) > 0:
+                logger.info(f"Translation backfill: {report}")
+        except Exception as e:
+            logger.warning(f"Translation backfill failed: {e}")

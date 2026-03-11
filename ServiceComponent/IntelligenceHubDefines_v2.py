@@ -258,6 +258,8 @@ APPENDIX_AI_MODEL           = '__AI_MODEL__'
 
 APPENDIX_VECTOR_SCORE       = '__VECTOR_SCORE__'        # Temporary added when doing vector search
 
+APPENDIX_TRANSLATED_REV     = "__TRANSLATED_REVISION__"
+
 
 ARCHIVED_FLAG_DROP = 'D'
 ARCHIVED_FLAG_ERROR = 'E'
