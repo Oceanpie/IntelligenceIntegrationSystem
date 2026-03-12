@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import logging
 import datetime
@@ -9,6 +10,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, List
 
+from GlobalConfig import EXPORT_PATH
 from VectorDB.VectorDBClient import VectorDBClient
 
 logger = logging.getLogger(__name__)
@@ -224,8 +226,13 @@ class IntelligenceAggregationEngine:
                 return
 
             clusters = latest.get("clusters", {})
+
+            export_folder = os.path.join(EXPORT_PATH, 'clusters')
+            os.makedirs(export_folder, exist_ok=True)
+
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"offline_cluster_snapshot_{timestamp}.txt"
+            filepath = os.path.join(export_folder, filename)
 
             # 收集并获取所需的文章标题以便调试阅读
             all_uuids = set()
@@ -247,7 +254,7 @@ class IntelligenceAggregationEngine:
                         uuid_to_title[uid] = title
 
             # 写入快照
-            with open(filename, "w", encoding="utf-8") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write(f"=== Offline Clustering Snapshot ===\n")
                 f.write(f"Job ID:      {job_id}\n")
                 f.write(f"Plan ID:     {latest.get('plan_id')}\n")
@@ -266,16 +273,18 @@ class IntelligenceAggregationEngine:
 
                     f.write(f"[{cid}] Size: {size}\n")
                     f.write(f"  ★ Representative:\n")
-                    f.write(f"     -> {repr_id} | {repr_title}\n")
+                    f.write(f"     -> {repr_title}\n")
+                    # f.write(f"     -> {repr_id} | {repr_title}\n")
                     f.write(f"  ● Members:\n")
 
                     for mid in cinfo.get("members", []):
                         m_title = uuid_to_title.get(mid, "Unknown Title")
-                        f.write(f"     - {mid} | {m_title}\n")
+                        f.write(f"     - {m_title}\n")
+                        # f.write(f"     - {mid} | {m_title}\n")
 
                     f.write("\n")
 
-            logger.info(f"Snapshot successfully written to {filename}")
+            logger.info(f"Snapshot successfully written to {filepath}")
 
         except Exception as e:
             logger.error(f"Failed to generate snapshot for {job_id}: {str(e)}")

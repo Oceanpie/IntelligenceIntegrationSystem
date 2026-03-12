@@ -1055,11 +1055,16 @@ class IntelligenceHub:
             # )
             # # =========================
 
+            # 新增传入 fetcher 以便后台监控线程使用
+            def doc_fetcher(uuids):
+                return self.get_intelligence(uuids, light_weight=True)
+
             # 3. 触发 VectorDB 离线聚合
             # 如果近期有数据，time_range_to_use 仍为 None，底层自动取 [Now - 24h, Now]
             job_id = self.aggregation_engine_summary.trigger_offline(
                 overrides=None,
-                time_range=time_range_to_use
+                time_range=time_range_to_use,
+                doc_fetcher=doc_fetcher
             )
 
             if job_id:

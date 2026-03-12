@@ -499,7 +499,7 @@ class AsyncTranslationPatch:
         logger.info("AsyncTranslationPatch backfill loop stopped.")
 
     def _scan_and_enqueue_backfill(self, limit: int):
-        if not self.mongo_db_archive or not self.mongo_db_archive.collection:
+        if self.mongo_db_archive is None or self.mongo_db_archive.collection is None:
             return
 
         # newest -> older: sort by archived time desc (your system uses APPENDIX.__TIME_ARCHIVED__)
