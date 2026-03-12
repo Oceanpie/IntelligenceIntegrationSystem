@@ -309,7 +309,7 @@ class AsyncTranslationPatch:
         new_title, new_brief, new_text = self._translate_via_ai(doc)
         if not (new_title or new_brief or new_text):
             # fail silently as patch behavior, or log minimal warning
-            logger.debug("AsyncTranslationPatch translate returned empty uuid=%s", task.uuid)
+            logger.warning("AsyncTranslationPatch translate returned empty uuid=%s", task.uuid)
             return
 
         # 5) Update with $set only: 3 fields + revision flag
@@ -377,7 +377,7 @@ class AsyncTranslationPatch:
             waited += 1
 
         if not client:
-            logger.debug("No available translation client (waited %ss).", max_wait_sec)
+            logger.warning("No available translation client (waited %ss).", max_wait_sec)
             return "", "", ""
 
         # ---------- Call chat with retries (lightweight) ----------

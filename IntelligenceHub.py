@@ -152,7 +152,7 @@ class IntelligenceHub:
             translated_revision="tr_patch_20260311",
             backfill_enabled=True,
             backfill_scan_limit_per_round=200,
-            backfill_interval_sec=3600
+            backfill_interval_sec=600
         )
         self.async_translation_patch.start()
 
