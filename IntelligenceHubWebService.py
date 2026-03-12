@@ -658,103 +658,29 @@ class IntelligenceHubWebService:
 
         @app.get("/api/clusters/latest")
         def api_clusters_latest():
-            """
-            Return latest offline clusters summary with repr article titles (joined from Mongo archive).
-            """
             try:
-                plan_id = request.args.get("plan_id", "agg_intelligence_summary_24h")
                 limit = int(request.args.get("limit", 200))
-
-                # 获取客户端期望的排序方式，默认改为按分数 'score'
                 client_sort_by = request.args.get("sort_by", "score")
                 desc = request.args.get("desc", "1") in ("1", "true", "True", "yes", "Y", "y")
 
                 hub = self.intelligence_hub
-
                 agg = getattr(hub, "aggregation_engine_summary", None)
                 if not agg:
                     return jsonify({"error": "Aggregation engine not configured"}), 501
 
-                # 1) get cluster summaries
-                # VectorDB底层没有AI评分字段，所以必须固定按 size(规模) 或 last_seen 挑出最主要的 N 个簇
-                summary = agg.get_latest_clusters_summary(
-                    sort_by="size",
-                    descending=True,
+                # 建立一个闭包透传 fetcher 给 engine
+                def doc_fetcher(uuids):
+                    return hub.get_intelligence(uuids, light_weight=True)
+
+                result = agg.build_rich_clusters_latest(
+                    doc_fetcher=doc_fetcher,
+                    doc_cleaner=exclude_raw_data,
                     limit=limit,
-                    include_noise=False
+                    sort_by=client_sort_by,
+                    descending=desc
                 )
 
-                clusters = summary.get("clusters") or []
-                if not clusters:
-                    return jsonify(summary), 200
-
-                # 2) batch fetch repr articles from Mongo archive
-                repr_ids = [c.get("repr_doc_id") for c in clusters if c.get("repr_doc_id")]
-                repr_ids = list(dict.fromkeys(repr_ids))  # unique keep order
-
-                repr_docs = hub.get_intelligence(repr_ids, light_weight=True) if repr_ids else []
-                if isinstance(repr_docs, dict):
-                    repr_docs = [repr_docs]
-
-                repr_map = {d.get("UUID"): d for d in (repr_docs or []) if isinstance(d, dict)}
-
-                # 3) attach title + href + full doc
-                out_clusters = []
-                for c in clusters:
-                    uuid = c.get("repr_doc_id")
-                    doc = repr_map.get(uuid) or {}
-                    title = doc.get("EVENT_TITLE") or doc.get("title") or "(No Title)"
-                    brief = doc.get("EVENT_BRIEF") or ""
-
-                    # 清洗并包含完整的数据对象，以便前端复用卡片渲染
-                    cleaned_docs = exclude_raw_data([doc]) if doc.get('UUID') else []
-                    cleaned_doc = cleaned_docs[0] if cleaned_docs else {}
-
-                    out_clusters.append({
-                        "cluster_id": c.get("cluster_id"),
-                        "size": c.get("size", 0),
-                        "last_seen": c.get("last_seen"),
-                        "repr_uuid": uuid,
-                        "repr_title": title,
-                        "repr_brief": brief,
-                        "href": f"/intelligence/{uuid}" if uuid else "#",
-                        "repr_doc": cleaned_doc
-                    })
-
-                # ====================================================
-                # 基于补齐后的 MongoDB 数据，对大列表进行二次内存排序
-                # ====================================================
-                if client_sort_by == "score":
-                    # 按代表文章的总分排序
-                    out_clusters.sort(
-                        key=lambda x: float(
-                            x.get("repr_doc", {}).get("APPENDIX", {}).get(APPENDIX_TOTAL_SCORE, 0.0) or 0.0),
-                        reverse=desc
-                    )
-                elif client_sort_by == "time":
-                    # 按代表文章的归档时间排序
-                    out_clusters.sort(
-                        key=lambda x: str(x.get("repr_doc", {}).get("APPENDIX", {}).get(APPENDIX_TIME_ARCHIVED, "")),
-                        reverse=desc
-                    )
-                elif client_sort_by == "size":
-                    # 按簇大小排序
-                    out_clusters.sort(key=lambda x: x.get("size", 0), reverse=desc)
-                # ====================================================
-
-                # keep original metadata
-                return jsonify({
-                    "plan_id": summary.get("plan_id"),
-                    "collection_name": summary.get("collection_name"),
-                    "version": summary.get("version"),
-                    "created_at": summary.get("created_at"),
-                    "time_range": summary.get("time_range"),
-                    "method": summary.get("method"),
-                    "params": summary.get("params"),
-                    "n_points": summary.get("n_points"),
-                    "n_clusters": summary.get("n_clusters"),
-                    "clusters": out_clusters
-                }), 200
+                return jsonify(result), 200
 
             except Exception as e:
                 logger.exception("api_clusters_latest error")
@@ -762,89 +688,34 @@ class IntelligenceHubWebService:
 
         @app.get("/api/clusters/<cluster_id>/members")
         def api_cluster_members(cluster_id: str):
-            """
-            返回某个 cluster 的成员子情报，从最新离线聚合里取 members，再从 Mongo 补齐。
-            """
             try:
-                plan_id = request.args.get("plan_id", "agg_intelligence_summary_24h")
                 limit = int(request.args.get("limit", 100))
                 offset = int(request.args.get("offset", 0))
+                sort_by = request.args.get("sort_by", "relevance")
+                desc = request.args.get("desc", "1") in ("1", "true", "True")
 
                 hub = self.intelligence_hub
                 agg = getattr(hub, "aggregation_engine_summary", None)
                 if not agg:
                     return jsonify({"error": "Aggregation engine not configured"}), 501
 
-                latest = agg.get_latest_offline() or {}
-                clusters = latest.get("clusters") or {}
-                cobj = clusters.get(cluster_id)
-                if not cobj:
-                    return jsonify({"error": f"cluster_id not found: {cluster_id}"}), 404
+                def doc_fetcher(uuids):
+                    return hub.get_intelligence(uuids, light_weight=True)
 
-                members = cobj.get("members") or []
-                total = len(members)
+                result = agg.build_rich_cluster_members(
+                    cluster_id=cluster_id,
+                    doc_fetcher=doc_fetcher,
+                    doc_cleaner=exclude_raw_data,
+                    offset=offset,
+                    limit=limit,
+                    sort_by=sort_by,
+                    descending=desc
+                )
 
-                offset = max(0, offset)
-                limit = max(1, min(500, limit))
-                sub = members[offset: offset + limit]
+                return jsonify(result), 200
 
-                docs = hub.get_intelligence(sub, light_weight=True) if sub else []
-                if isinstance(docs, dict):
-                    docs = [docs]
-
-                # 保持 members 原顺序 (即与簇中心的相关度顺序)
-                rank = {u: i for i, u in enumerate(sub)}
-                items = []
-
-                # 批量清洗文档
-                cleaned_docs = exclude_raw_data([d for d in docs if isinstance(d, dict)])
-                cleaned_map = {d.get("UUID"): d for d in cleaned_docs}
-
-                for uid in sub:
-                    if uid not in rank:
-                        continue
-
-                    cleaned_doc = cleaned_map.get(uid, {})
-                    title = cleaned_doc.get("EVENT_TITLE") or cleaned_doc.get("title") or "(No Title)"
-
-                    items.append({
-                        "uuid": uid,
-                        "title": title,
-                        "href": f"/intelligence/{uid}",
-                        "doc": cleaned_doc
-                    })
-
-                # ====================================================
-                # 动态排序逻辑：默认改为 relevance (相关度)
-                # ====================================================
-                sort_by = request.args.get("sort_by", "relevance")
-                desc = request.args.get("desc", "1") in ("1", "true", "True")
-
-                if sort_by == "score":
-                    items.sort(
-                        key=lambda x: float(x["doc"].get("APPENDIX", {}).get("__TOTAL_SCORE__", 0.0) or 0.0),
-                        reverse=desc
-                    )
-                elif sort_by == "time":
-                    items.sort(
-                        key=lambda x: str(x["doc"].get("APPENDIX", {}).get("__TIME_ARCHIVED__", "")),
-                        reverse=desc
-                    )
-                else:
-                    # "relevance" 或其他值：回退到算法输出的原始相关度顺序
-                    # rank 越小(即排在 members 数组越前面)，代表离簇中心越近，相关度越高。
-                    # 注意：相关度排列表现最好是从高到低，所以强制使用从小到大升序排，忽略 desc 的翻转指令。
-                    items.sort(key=lambda x: rank.get(x["uuid"], 10 ** 9))
-                # ====================================================
-
-                return jsonify({
-                    "cluster_id": cluster_id,
-                    "total": total,
-                    "offset": offset,
-                    "limit": limit,
-                    "items": items
-                }), 200
-
+            except ValueError as ve:
+                return jsonify({"error": str(ve)}), 404
             except Exception as e:
                 logger.exception("api_cluster_members error")
                 return jsonify({"error": str(e)}), 500
@@ -988,10 +859,6 @@ class IntelligenceHubWebService:
         @app.route('/api/debug/trigger_aggregation', methods=['POST'])
         @WebServiceAccessManager.login_required
         def debug_trigger_aggregation():
-            """
-            测试后门：允许手动指定时间范围触发离线聚类
-            Payload: {"start_time": "2026-02-25T00:00:00", "end_time": "2026-02-26T00:00:00"}
-            """
             data = request.get_json() or {}
             start_str = data.get('start_time')
             end_str = data.get('end_time')
@@ -1003,12 +870,15 @@ class IntelligenceHubWebService:
                 time_range = (start_ts, end_ts)
 
             try:
-                # 获取引擎并触发
                 agg_engine = self.intelligence_hub.aggregation_engine_summary
                 if not agg_engine:
                     return jsonify({"error": "Engine not ready"}), 503
 
-                job_id = agg_engine.trigger_offline(time_range=time_range)
+                # 新增传入 fetcher 以便后台监控线程使用
+                def doc_fetcher(uuids):
+                    return self.intelligence_hub.get_intelligence(uuids, light_weight=True)
+
+                job_id = agg_engine.trigger_offline(time_range=time_range, doc_fetcher=doc_fetcher)
                 return jsonify({
                     "status": "success",
                     "job_id": job_id,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 import logging
+import datetime
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, List
 
@@ -172,15 +174,243 @@ class IntelligenceAggregationEngine:
     # ----------------------------
 
     def trigger_offline(self, overrides: Optional[Dict[str, Any]] = None,
-                        time_range: Optional[Tuple[float, float]] = None) -> str:
+                        time_range: Optional[Tuple[float, float]] = None,
+                        doc_fetcher: callable = None) -> str:
         """
         Trigger offline aggregation and return job_id.
+        同时启动后台线程监控任务，并在完成时生成 Snapshot 文件。
         """
         res = self.client.run_aggregation_plan(self.plan_spec.plan_id, overrides=overrides, time_range=time_range)
         job_id = res.get("job_id")
         self.last_job_id = job_id
         self.last_trigger_at = time.time()
+
+        if job_id:
+            threading.Thread(
+                target=self._monitor_offline_job,
+                args=(job_id, doc_fetcher),
+                daemon=True
+            ).start()
+
         return job_id
+
+    def _monitor_offline_job(self, job_id: str, doc_fetcher: callable):
+        """
+        临时线程：轮询作业状态并生成文本分析报告
+        """
+        logger.info(f"Started monitoring offline aggregation job: {job_id}")
+        while True:
+            try:
+                job_info = self.get_job(job_id)
+                status = job_info.get("status")
+
+                if status == "completed":
+                    logger.info(f"Job {job_id} completed. Generating text snapshot...")
+                    self._generate_snapshot(job_id, doc_fetcher)
+                    break
+                elif status == "failed":
+                    logger.error(f"Job {job_id} failed. Reason: {job_info.get('error')}")
+                    break
+
+                time.sleep(5)  # 每5秒轮询一次
+            except Exception as e:
+                logger.error(f"Error monitoring job {job_id}: {str(e)}")
+                time.sleep(5)
+
+    def _generate_snapshot(self, job_id: str, doc_fetcher: callable):
+        try:
+            latest = self.get_latest_offline()
+            if not latest:
+                return
+
+            clusters = latest.get("clusters", {})
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"offline_cluster_snapshot_{timestamp}.txt"
+
+            # 收集并获取所需的文章标题以便调试阅读
+            all_uuids = set()
+            for cid, cinfo in clusters.items():
+                if cinfo.get("repr_doc_id"):
+                    all_uuids.add(cinfo["repr_doc_id"])
+                for member_id in (cinfo.get("members") or []):
+                    all_uuids.add(member_id)
+
+            uuid_to_title = {}
+            if doc_fetcher and all_uuids:
+                docs = doc_fetcher(list(all_uuids))
+                if isinstance(docs, dict): docs = [docs]
+                for d in docs:
+                    if not isinstance(d, dict): continue
+                    uid = d.get("UUID")
+                    title = d.get("EVENT_TITLE") or d.get("title") or "(No Title)"
+                    if uid:
+                        uuid_to_title[uid] = title
+
+            # 写入快照
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(f"=== Offline Clustering Snapshot ===\n")
+                f.write(f"Job ID:      {job_id}\n")
+                f.write(f"Plan ID:     {latest.get('plan_id')}\n")
+                f.write(f"Generated:   {datetime.datetime.now().isoformat()}\n")
+                f.write(f"Total Points:{latest.get('n_points', 0)}\n")
+                f.write(f"Clusters:    {latest.get('n_clusters', 0)}\n")
+                f.write(f"Noise Size:  {latest.get('n_noise', 0)}\n")
+                f.write("===================================\n\n")
+
+                sorted_clusters = sorted(clusters.items(), key=lambda x: x[1].get("size", 0), reverse=True)
+
+                for cid, cinfo in sorted_clusters:
+                    size = cinfo.get("size", 0)
+                    repr_id = cinfo.get("repr_doc_id")
+                    repr_title = uuid_to_title.get(repr_id, "Unknown Title / Database Missing")
+
+                    f.write(f"[{cid}] Size: {size}\n")
+                    f.write(f"  ★ Representative:\n")
+                    f.write(f"     -> {repr_id} | {repr_title}\n")
+                    f.write(f"  ● Members:\n")
+
+                    for mid in cinfo.get("members", []):
+                        m_title = uuid_to_title.get(mid, "Unknown Title")
+                        f.write(f"     - {mid} | {m_title}\n")
+
+                    f.write("\n")
+
+            logger.info(f"Snapshot successfully written to {filename}")
+
+        except Exception as e:
+            logger.error(f"Failed to generate snapshot for {job_id}: {str(e)}")
+
+    # ----------------------------
+    # High-level API Abstractions
+    # ----------------------------
+
+    def build_rich_clusters_latest(
+            self,
+            doc_fetcher: callable,
+            doc_cleaner: callable,
+            limit: int = 200,
+            sort_by: str = "score",
+            descending: bool = True
+    ) -> Dict[str, Any]:
+        """
+        组合业务逻辑：获取摘要，提取文章本体，清洗，并按请求排序。
+        """
+        summary = self.get_latest_clusters_summary(
+            sort_by="size", descending=True, limit=limit, include_noise=False
+        )
+        clusters = summary.get("clusters") or []
+        if not clusters:
+            return summary
+
+        repr_ids = list(dict.fromkeys([c.get("repr_doc_id") for c in clusters if c.get("repr_doc_id")]))
+        repr_docs = doc_fetcher(repr_ids) if repr_ids else []
+        if isinstance(repr_docs, dict): repr_docs = [repr_docs]
+        repr_map = {d.get("UUID"): d for d in (repr_docs or []) if isinstance(d, dict)}
+
+        out_clusters = []
+        for c in clusters:
+            uuid = c.get("repr_doc_id")
+            doc = repr_map.get(uuid) or {}
+            title = doc.get("EVENT_TITLE") or doc.get("title") or "(No Title)"
+            brief = doc.get("EVENT_BRIEF") or ""
+
+            cleaned_docs = doc_cleaner([doc]) if doc.get('UUID') else []
+            cleaned_doc = cleaned_docs[0] if cleaned_docs else {}
+
+            out_clusters.append({
+                "cluster_id": c.get("cluster_id"),
+                "size": c.get("size", 0),
+                "last_seen": c.get("last_seen"),
+                "repr_uuid": uuid,
+                "repr_title": title,
+                "repr_brief": brief,
+                "href": f"/intelligence/{uuid}" if uuid else "#",
+                "repr_doc": cleaned_doc
+            })
+
+        if sort_by == "score":
+            out_clusters.sort(
+                key=lambda x: float(x.get("repr_doc", {}).get("APPENDIX", {}).get("__TOTAL_SCORE__", 0.0) or 0.0),
+                reverse=descending
+            )
+        elif sort_by == "time":
+            out_clusters.sort(
+                key=lambda x: str(x.get("repr_doc", {}).get("APPENDIX", {}).get("__TIME_ARCHIVED__", "")),
+                reverse=descending
+            )
+        elif sort_by == "size":
+            out_clusters.sort(key=lambda x: x.get("size", 0), reverse=descending)
+
+        summary["clusters"] = out_clusters
+        return summary
+
+    def build_rich_cluster_members(
+            self,
+            cluster_id: str,
+            doc_fetcher: callable,
+            doc_cleaner: callable,
+            offset: int = 0,
+            limit: int = 100,
+            sort_by: str = "relevance",
+            descending: bool = True
+    ) -> Dict[str, Any]:
+        """
+        组合业务逻辑：获取簇内成员切片，提取文章本体，清洗，并按请求排序。
+        """
+        latest = self.get_latest_offline() or {}
+        clusters = latest.get("clusters") or {}
+        cobj = clusters.get(cluster_id)
+        if not cobj:
+            raise ValueError(f"cluster_id not found: {cluster_id}")
+
+        members = cobj.get("members") or []
+        total = len(members)
+
+        offset = max(0, offset)
+        limit = max(1, min(500, limit))
+        sub = members[offset: offset + limit]
+
+        docs = doc_fetcher(sub) if sub else []
+        if isinstance(docs, dict): docs = [docs]
+
+        rank = {u: i for i, u in enumerate(sub)}
+        cleaned_docs = doc_cleaner([d for d in docs if isinstance(d, dict)])
+        cleaned_map = {d.get("UUID"): d for d in cleaned_docs}
+
+        items = []
+        for uid in sub:
+            if uid not in rank: continue
+            cleaned_doc = cleaned_map.get(uid, {})
+            title = cleaned_doc.get("EVENT_TITLE") or cleaned_doc.get("title") or "(No Title)"
+
+            items.append({
+                "uuid": uid,
+                "title": title,
+                "href": f"/intelligence/{uid}",
+                "doc": cleaned_doc
+            })
+
+        if sort_by == "score":
+            items.sort(
+                key=lambda x: float(x["doc"].get("APPENDIX", {}).get("__TOTAL_SCORE__", 0.0) or 0.0),
+                reverse=descending
+            )
+        elif sort_by == "time":
+            items.sort(
+                key=lambda x: str(x["doc"].get("APPENDIX", {}).get("__TIME_ARCHIVED__", "")),
+                reverse=descending
+            )
+        else:
+            # relevance (Default)
+            items.sort(key=lambda x: rank.get(x["uuid"], 10 ** 9))
+
+        return {
+            "cluster_id": cluster_id,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "items": items
+        }
 
     def get_job(self, job_id: str) -> Dict[str, Any]:
         return self.client.get_aggregation_job(job_id)

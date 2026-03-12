@@ -3857,7 +3857,9 @@ prompt和uuid无关，只通过prompt_version进行匹配。
 
 
 
-
+我会给出IntelligenceAggregationEngine和引用它的service部分代码，我需要你做两件事情：
+1. 将api_clusters_latest和api_cluster_members主要部分移到IntelligenceAggregationEngine，抽取代码复用。
+2. 每次离线聚类时，开一个临时线程监控任务状态，一旦任务完成，记录latest_offline的一个snapshot到一个文本文件，只需要记录标题，以及你认为有助于调试的信息，并且体现层次关系。
 
 
 
