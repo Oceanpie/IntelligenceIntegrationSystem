@@ -896,9 +896,9 @@ class IntelligenceHub:
                     chunk_overlap=50
                 )
 
-                plan_spec = generate_aggregation_plan(profile="hdbscan_fine")
+                plan_spec = generate_aggregation_plan(profile="agglomerative_strict")
                 aggregation_engine_summary = IntelligenceAggregationEngine(self.vector_db_client, plan_spec)
-                aggregation_engine_summary.ensure_plan(overwrite=False)
+                aggregation_engine_summary.ensure_plan(overwrite=True)
 
                 with self.lock:
                     self.vector_db_engine_summary = IntelligenceVectorDBEngine(vector_db_summary)
