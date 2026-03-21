@@ -195,6 +195,8 @@ class DynamicGraphEngine:
                     event_period=(dt_start, dt_end)
                 )
 
+                logger.info(f"[Graph] VectorDB returns {len(candidates)} nodes (threshold > 0.50)")
+
                 # --- B. 内存精算与多维软打分 ---
                 for cand in candidates:
                     cand_uuid = cand.get("doc_id")
@@ -219,6 +221,10 @@ class DynamicGraphEngine:
                         entities_pool=current_entities_pool,
                         cand_entities=cand_entities
                     )
+
+                    if score < self.THRESHOLD_SCORE and cand_vec_sim > 0.75:
+                        logger.warning(
+                            f"[Graph] Cut simular nodes: {cand_uuid} | total score {score:.2f} < threshold {self.THRESHOLD_SCORE} | reason: {reason}")
 
                     if score >= self.THRESHOLD_SCORE:
                         # 建立连线！
