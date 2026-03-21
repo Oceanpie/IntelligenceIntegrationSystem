@@ -12,6 +12,8 @@
 
 + [Intelligence Search](/intelligences/search)
 
++ [Intelligence Graph](/intelligence/graph/view)
+
 -----------------------------------------------
 
 #### Statistics

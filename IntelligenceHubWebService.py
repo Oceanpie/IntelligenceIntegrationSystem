@@ -440,6 +440,13 @@ class IntelligenceHubWebService:
         def intelligences_search_page():
             return render_template('intelligence_search.html')
 
+        @app.route('/intelligence/graph/view', methods=['GET'])
+        @WebServiceAccessManager.login_required
+        def intelligence_graph_page():
+            # 如果用户通过 URL 参数带了 UUID (例如从详情页跳转过来)，直接传给前端
+            seed_uuid = request.args.get('uuid', '')
+            return render_template('intelligence_graph.html', seed_uuid=seed_uuid)
+
         # ----------------------------------------------------------------------------------------
 
         @app.route('/intelligences/query', methods=['GET', 'POST'])
@@ -886,6 +893,79 @@ class IntelligenceHubWebService:
                 })
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
+
+        # --------------------------- Intelligence Graph ---------------------------
+
+        @app.route('/intelligence/graph/build', methods=['POST'])
+        @WebServiceAccessManager.login_required
+        def trigger_graph_build():
+            """
+            触发一次异步的情报脉络图谱推演
+            Body JSON: {"seed_uuid": "xxx", "max_depth": 3, "window_days": 7}
+            """
+            graph_engine = self.intelligence_hub.dynamic_graph_engine
+
+            if graph_engine is None:
+                return jsonify({
+                    "error": "Service Unavailable",
+                    "message": "Graph engine is not ready yet.",
+                    "code": "ENGINE_INITIALIZING"
+                }), 503
+
+            data = request.get_json() or {}
+            seed_uuid = data.get('seed_uuid')
+
+            if not seed_uuid:
+                return jsonify({"error": "Missing seed_uuid"}), 400
+
+            max_depth = int(data.get('max_depth', 3))
+            window_days = int(data.get('window_days', 7))
+
+            # 触发异步推演，毫秒级返回 thread_id
+            try:
+                thread_id = graph_engine.trigger_graph_build(
+                    seed_uuid=seed_uuid,
+                    max_depth=max_depth,
+                    window_days=window_days
+                )
+                return jsonify({
+                    "status": "success",
+                    "thread_id": thread_id,
+                    "message": "Graph building task submitted."
+                }), 202
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        @app.route('/intelligence/graph/status/<thread_id>', methods=['GET'])
+        @WebServiceAccessManager.login_required
+        def get_graph_status(thread_id):
+            """
+            前端轮询接口，获取推演状态与最终数据
+            """
+            graph_engine = self.intelligence_hub.dynamic_graph_engine
+
+            if graph_engine is None:
+                return jsonify({
+                    "error": "Service Unavailable",
+                    "message": "Graph engine is not ready yet.",
+                    "code": "ENGINE_INITIALIZING"
+                }), 503
+
+            snapshot = graph_engine.get_snapshot(thread_id)
+
+            if not snapshot:
+                return jsonify({"error": "Thread ID not found"}), 404
+
+            # 隐藏内部的 seed_uuid 等非必要字段，只吐出前端需要的核心状态和数据
+            return jsonify({
+                "thread_id": snapshot.get("thread_id"),
+                "status": snapshot.get("status"),  # PROCESSING, ANALYZING, COMPLETED, FAILED
+                "created_at": snapshot.get("created_at"),
+                "nodes": snapshot.get("nodes", []),
+                "edges": snapshot.get("edges", []),
+                "llm_summary": snapshot.get("llm_summary"),
+                "llm_evaluation_score": snapshot.get("llm_evaluation_score")
+            })
 
         @app.route('/maintenance/export_mongodb', methods=['POST'])
         @WebServiceAccessManager.login_required

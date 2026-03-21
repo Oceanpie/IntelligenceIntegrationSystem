@@ -13,6 +13,7 @@ from pymongo.errors import ConnectionFailure
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_result
 
 from GlobalConfig import EXPORT_PATH
+from ServiceComponent.DynamicGraphEngine import DynamicGraphEngine
 from prompts_v2x import ANALYSIS_PROMPT_TABLE
 from Tools.MongoDBAccess import MongoDBStorage
 from VectorDB.VectorDBClient import VectorDBClient
@@ -122,6 +123,9 @@ class IntelligenceHub:
             ai_client_manager=self.ai_client_manager,
             db_storage=self.mongo_db_recommendation
         )
+
+        # Init when vector is ready.
+        self.dynamic_graph_engine: Optional[DynamicGraphEngine] = None
 
         # ------------------ Loads ------------------
 
@@ -904,6 +908,7 @@ class IntelligenceHub:
                     self.vector_db_engine_summary = IntelligenceVectorDBEngine(vector_db_summary)
                     self.vector_db_engine_full_text = IntelligenceVectorDBEngine(vector_db_full_text)
                     self.aggregation_engine_summary = aggregation_engine_summary
+                    self._init_graph_engine()
 
                 self._bootstrap_aggregation_once()
 
@@ -928,6 +933,14 @@ class IntelligenceHub:
         logger.info("Vector DB init worker stopped due to shutdown signal.")
         return False
 
+    def _init_graph_engine(self):
+        self.dynamic_graph_engine = DynamicGraphEngine(
+            mongo_db = self.mongo_db_archive,
+            query_engine = self.archive_db_query_engine,
+            vector_engine = self.vector_db_engine_summary,
+            # ai_client = self.ai_client_manager,
+            ai_client = None,
+        )
 
     # ------------------------------------------------ Scheduled Tasks -------------------------------------------------
 
