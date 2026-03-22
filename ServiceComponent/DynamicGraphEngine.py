@@ -6,6 +6,7 @@ import threading
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Set, Tuple
 
+from ServiceComponent.IntelligenceVectorDBEngine import IntelligenceVectorDBEngine
 from Tools.MongoDBAccess import MongoDBStorage
 from AIClientCenter.AIClientManager import BaseAIClient
 from MyPythonUtility.DictTools import dict_list_to_markdown
@@ -167,10 +168,19 @@ class DynamicGraphEngine:
             current_entities_pool = self._extract_rare_entities(seed_doc)
 
             seed_time = self._get_timestamp(seed_doc)
+
+            # 为这次推演临时生成专属的时代黑名单
+            self.current_era_stop_entities = self._refresh_dynamic_stop_entities(base_time=seed_time, days_back=30)
+
             # 探索队列: (当前UUID, 当前参考时间, 当前内容(用于检索), 当前跳数)
-            exploration_queue = [(seed_uuid, seed_time, self._get_search_text(seed_doc), 0)]
+            exploration_queue = [(
+                seed_uuid,
+                seed_time,
+                IntelligenceVectorDBEngine.build_search_text(seed_doc, 'summary'), 0
+            )]
             visited_uuids = {seed_uuid}
 
+            # 2. 开始 N 轮深度迭代 (BFS)
             # 2. 开始 N 轮深度迭代 (BFS)
             while exploration_queue:
                 current_uuid, current_time, current_text, depth = exploration_queue.pop(0)
@@ -178,26 +188,36 @@ class DynamicGraphEngine:
                 if depth >= max_depth:
                     continue
 
-                # --- A. VectorDB 双向时间窗检索 ---
-                # 将 timestamp 转换为 datetime 对象，用于 vector_engine.query
+                # 将时间戳转换为可读的 datetime
                 dt_center = datetime.datetime.fromtimestamp(current_time, tz=datetime.timezone.utc)
                 dt_start = dt_center - datetime.timedelta(days=window_days)
                 dt_end = dt_center + datetime.timedelta(days=window_days)
 
-                logger.debug(
-                    f"[{thread_id}] Exploring depth {depth + 1} from {current_uuid}. Window: {dt_start.date()} to {dt_end.date()}")
+                # ==========================================
+                # 💡 [日志增强]：打印当前探索节点的全景信息
+                # ==========================================
+                logger.info(
+                    f"\n{'=' * 60}\n"
+                    f"🔍 [Depth {depth + 1}/{max_depth}] 探索起点: {current_uuid}\n"
+                    f"📅 中心时间: {dt_center.strftime('%Y-%m-%d %H:%M')}\n"
+                    f"⏳ 检索窗口: [{dt_start.strftime('%Y-%m-%d')}] TO [{dt_end.strftime('%Y-%m-%d')}]\n"
+                    f"🎯 当前追踪实体池: {list(current_entities_pool)}\n"
+                    f"{'=' * 60}"
+                )
 
-                # 查询 VectorDB (利用底层的 filter_criteria 过滤元数据时间)
+                # --- A. VectorDB 双向时间窗检索 ---
                 candidates = self.vector_engine.query(
                     text=current_text,
-                    top_n=30,  # 捞取足够多候选集进行二次软打分
-                    score_threshold=0.50,  # 放宽向量召回阈值，把决断权交给下方的多维软打分公式
+                    top_n=30,
+                    score_threshold=0.50,  # 极低阈值，放水给后端的软打分
                     event_period=(dt_start, dt_end)
                 )
 
-                logger.info(f"[Graph] VectorDB returns {len(candidates)} nodes (threshold > 0.50)")
+                logger.info(
+                    f"📥 VectorDB 在该时间窗内共召回 {len(candidates)} 个初始候选者。开始进入严苛的【多维软打分】阶段...")
 
                 # --- B. 内存精算与多维软打分 ---
+                accepted_count = 0
                 for cand in candidates:
                     cand_uuid = cand.get("doc_id")
                     if not cand_uuid or cand_uuid in visited_uuids:
@@ -211,6 +231,8 @@ class DynamicGraphEngine:
                         continue
 
                     cand_time = self._get_timestamp(cand_doc)
+                    cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
+                        '%Y-%m-%d')
                     cand_entities = self._extract_rare_entities(cand_doc)
 
                     # 核心公式计算
@@ -222,14 +244,17 @@ class DynamicGraphEngine:
                         cand_entities=cand_entities
                     )
 
-                    if score < self.THRESHOLD_SCORE and cand_vec_sim > 0.75:
-                        logger.warning(
-                            f"[Graph] Cut simular nodes: {cand_uuid} | total score {score:.2f} < threshold {self.THRESHOLD_SCORE} | reason: {reason}")
+                    # ==========================================
+                    # 💡 [日志增强]：判定过程一览无余
+                    # ==========================================
+                    title = cand_doc.get("EVENT_TITLE", "")[:15] + "..."  # 截断长标题
+                    log_prefix = f"  [{cand_time_str}] {title} ({cand_uuid[:8]}...) "
 
                     if score >= self.THRESHOLD_SCORE:
-                        # 建立连线！
-                        logger.info(f"[{thread_id}] Linked: {current_uuid} -> {cand_uuid} (Score: {score:.2f})")
+                        logger.info(
+                            f"  ✅ [LINKED] {log_prefix}\n      -> 总分: {score:.2f} (≥阈值{self.THRESHOLD_SCORE}) | 依据: {reason}")
                         visited_uuids.add(cand_uuid)
+                        accepted_count += 1
 
                         nodes_dict[cand_uuid] = self._create_graph_node(cand_doc)
                         edges_list.append(GraphEdge(
@@ -241,9 +266,15 @@ class DynamicGraphEngine:
 
                         # 加入下一轮探索队列
                         exploration_queue.append((cand_uuid, cand_time, self._get_search_text(cand_doc), depth + 1))
-
-                        # 特征演化：吸收新节点的罕见实体，应对事件演变
+                        # 特征演化
                         current_entities_pool.update(cand_entities)
+                    else:
+                        # # 对于被拒绝的，只打印那些向量明明很相似（>0.6）但由于各种原因被斩断的，减少刷屏
+                        # if cand_vec_sim > 0.60:
+                        logger.info(
+                            f"  🚫 [REJECT] {log_prefix}\n      -> 总分: {score:.2f} (<阈值{self.THRESHOLD_SCORE}) | 死因: {reason}")
+
+                logger.info(f"🏁 本轮探索结束。成功采纳 {accepted_count} 个节点进入脉络。")
 
             # 3. 排序与结构化
             sorted_nodes = sorted(list(nodes_dict.values()), key=lambda x: x.incident_time if x.incident_time else "")
@@ -322,13 +353,6 @@ class DynamicGraphEngine:
             except ValueError:
                 pass
         return time.time()
-
-    def _get_search_text(self, doc: dict) -> str:
-        """合成用于 VectorDB 检索的文本"""
-        title = doc.get("EVENT_TITLE") or ""
-        brief = doc.get("EVENT_BRIEF") or ""
-        text = doc.get("EVENT_TEXT") or ""
-        return f"{title}\n{brief}\n{text}".strip()
 
     def _create_graph_node(self, doc: dict, is_seed: bool = False) -> GraphNode:
         times = doc.get("TIME") or []
@@ -423,22 +447,23 @@ class DynamicGraphEngine:
                 {"$set": {"status": "COMPLETED"}}
             )
 
-    def _refresh_dynamic_stop_entities(self, days_back: int = 30, top_k: int = 50) -> Set[str]:
-        """
-        利用 MongoDB 聚合管道，动态统计过去 N 天内出现频率最高的实体，作为图谱推演的“停用词”。
-        """
+    def _refresh_dynamic_stop_entities(self, base_time: float = None, days_back: int = 30, top_k: int = 50) -> Set[str]:
         logger.info(f"Refreshing dynamic STOP_ENTITIES from MongoDB (past {days_back} days, top {top_k})...")
 
         # 1. 计算时间窗口的起点
-        cutoff_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_back)
+        if base_time:
+            # 基于种子情报发生的时间往前推 30 天
+            end_date = datetime.datetime.fromtimestamp(base_time, tz=datetime.timezone.utc)
+        else:
+            end_date = datetime.datetime.now(datetime.timezone.utc)
 
-        # 2. 构建 MongoDB 聚合管道 (Aggregation Pipeline)
-        # 这种写法将计算完全下推给数据库，速度极快，无需把数据拉到 Python 内存中
+        cutoff_date = end_date - datetime.timedelta(days=days_back)
+
         pipeline = [
-            # Step 1: 过滤出最近 N 天的情报数据 (这里使用归档时间，兼容性最好)
             {
                 "$match": {
-                    f"APPENDIX.{APPENDIX_TIME_ARCHIVED}": {"$gte": cutoff_date}
+                    # 匹配发生在那个时间段内的数据
+                    f"APPENDIX.{APPENDIX_TIME_ARCHIVED}": {"$gte": cutoff_date, "$lte": end_date}
                 }
             },
             # Step 2: 将三个实体数组合并成一个统一的数组池

@@ -14,6 +14,7 @@ from flask import Flask, request, jsonify, session, redirect, url_for, render_te
     make_response, Response
 
 from GlobalConfig import *
+from MyPythonUtility.DictTools import DictPrinter
 from prompts_v2x import ANALYSIS_PROMPT_TABLE as PROMPT_TABLE_V2
 from Tools.CommonPost import common_post
 from Tools.RequestTracer import RequestTracer
@@ -25,6 +26,7 @@ from ServiceComponent.PostManager import generate_html_from_markdown
 from ServiceComponent.IntelligenceDistributionPageRender import get_intelligence_statistics_page
 from ServiceComponent.IntelligenceHubDefines_v2 import APPENDIX_VECTOR_SCORE, APPENDIX_TOTAL_SCORE
 from ServiceComponent.RateStatisticsPageRender import get_statistics_page
+from ServiceComponent.IntelligenceVectorDBEngine import IntelligenceVectorDBEngine
 from IntelligenceHub import CollectedData, IntelligenceHub, ProcessedData, APPENDIX_TIME_ARCHIVED
 
 logger = logging.getLogger(__name__)
@@ -372,6 +374,8 @@ class IntelligenceHubWebService:
                 if not intelligence:
                     return jsonify({"error": "Intelligence not found"}), 404
 
+                print(DictPrinter.pretty_print(intelligence))
+
                 return jsonify({
                     "success": True,
                     "data": intelligence
@@ -616,13 +620,7 @@ class IntelligenceHubWebService:
                 if ref_uuids := p.get('reference', ''):
                     intelligence = self.intelligence_hub.get_intelligence(ref_uuids)
                     if intelligence:
-                        # Almost the same as IntelligenceVectorDBEngine preparing data.
-                        text_parts = [
-                            intelligence.get('EVENT_TITLE', ''),
-                            intelligence.get('EVENT_BRIEF', ''),
-                            intelligence.get('EVENT_TEXT', '')
-                        ]
-                        text = "\n\n".join([str(t) for t in text_parts if t and str(t).strip()])
+                        text = IntelligenceVectorDBEngine.build_search_text(intelligence, 'summary')
             if not text:
                 return [], 0
 
