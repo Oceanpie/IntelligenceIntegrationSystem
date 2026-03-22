@@ -68,8 +68,8 @@ class DynamicGraphEngine:
     # --- 软打分公式权重配置 (可根据实际数据表现微调) ---
     WEIGHT_VECTOR = 0.60  # 向量相似度权重 (VectorDB 返回的 score)
     WEIGHT_ENTITY = 0.40  # 罕见实体交集权重
-    TIME_DECAY_RATE = 0.05  # 每天的绝对时间差衰减惩罚
-    THRESHOLD_SCORE = 0.68  # 综合得分阈值，低于此分数不建立边
+    TIME_DECAY_RATE = 0.05  # # 每天扣 0.05 分，如果相差 1 年 (365天)，会扣 18 分
+    THRESHOLD_SCORE = 0.60  # 综合得分阈值，低于此分数不建立边
 
     # --- TF-IDF 实体黑名单 (防止超级节点污染图谱) ---
     # 理想情况下，这应该是一个定时从数据库统计生成的集合，这里提供基础内置名单
@@ -190,7 +190,7 @@ class DynamicGraphEngine:
 
                 # 将时间戳转换为可读的 datetime
                 dt_center = datetime.datetime.fromtimestamp(current_time, tz=datetime.timezone.utc)
-                dt_start = dt_center - datetime.timedelta(days=window_days)
+                dt_start = dt_center - datetime.timedelta(days=window_days)f2e0a299-51b3-415c-ac42-3193e73ffbd5
                 dt_end = dt_center + datetime.timedelta(days=window_days)
 
                 # ==========================================
@@ -208,9 +208,10 @@ class DynamicGraphEngine:
                 # --- A. VectorDB 双向时间窗检索 ---
                 candidates = self.vector_engine.query(
                     text=current_text,
-                    top_n=30,
+                    top_n=60,
                     score_threshold=0.50,  # 极低阈值，放水给后端的软打分
-                    event_period=(dt_start, dt_end)
+                    # event_period=(dt_start, dt_end),
+                    timeout=180,
                 )
 
                 logger.info(
@@ -265,14 +266,15 @@ class DynamicGraphEngine:
                         ))
 
                         # 加入下一轮探索队列
-                        exploration_queue.append((cand_uuid, cand_time, self._get_search_text(cand_doc), depth + 1))
+                        exploration_queue.append(
+                            (cand_uuid, cand_time, IntelligenceVectorDBEngine.build_search_text(cand_doc), depth + 1))
                         # 特征演化
                         current_entities_pool.update(cand_entities)
                     else:
-                        # # 对于被拒绝的，只打印那些向量明明很相似（>0.6）但由于各种原因被斩断的，减少刷屏
-                        # if cand_vec_sim > 0.60:
-                        logger.info(
-                            f"  🚫 [REJECT] {log_prefix}\n      -> 总分: {score:.2f} (<阈值{self.THRESHOLD_SCORE}) | 死因: {reason}")
+                        # 对于被拒绝的，只打印那些向量明明很相似（>0.6）但由于各种原因被斩断的，减少刷屏
+                        if cand_vec_sim > 0.60:
+                            logger.info(
+                                f"  🚫 [REJECT] {log_prefix}\n      -> 总分: {score:.2f} (<阈值{self.THRESHOLD_SCORE}) | 死因: {reason}")
 
                 logger.info(f"🏁 本轮探索结束。成功采纳 {accepted_count} 个节点进入脉络。")
 

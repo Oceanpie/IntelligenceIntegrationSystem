@@ -133,27 +133,22 @@ class IntelligenceVectorDBEngine:
               event_period: Optional[Tuple[datetime.datetime, datetime.datetime]] = None,
               archive_period: Optional[Tuple[datetime.datetime, datetime.datetime]] = None,
               rate_class: Optional[str] = None,
-              rate_threshold: Optional[float] = None
+              rate_threshold: Optional[float] = None,
+              timeout: int = 30,
               ) -> List[Dict]:
         """
         Query with support for both v1 and v2 metadata fields.
         """
         filters = []
 
-        # if event_period:
-        #     filters.append({
-        #         "timestamp": {"$gte": event_period[0].timestamp(), "$lte": event_period[1].timestamp()}
-        #         # "pub_timestamp": {"$gte": event_period[0].timestamp(), "$lte": event_period[1].timestamp()}
-        #     })
-        #
-        # if archive_period:
-        #     filters.append({
-        #         "archived_timestamp": {"$gte": archive_period[0].timestamp(), "$lte": archive_period[1].timestamp()}
-        #     })
-
+        # NOTE: The timestamp and pub_timestamp fields are int type. But archived_timestamp field is float.
         if event_period:
-            filters.append({"timestamp": {"$gte": event_period[0].timestamp()}})
-            filters.append({"timestamp": {"$lte": event_period[1].timestamp()}})
+            filters.append({
+                "timestamp": {"$gte": int(event_period[0].timestamp())}
+            })
+            filters.append({
+                "timestamp": {"$lte": int(event_period[1].timestamp())}
+            })
 
         if archive_period:
             filters.append({"archived_timestamp": {"$gte": archive_period[0].timestamp()}})
@@ -176,7 +171,8 @@ class IntelligenceVectorDBEngine:
             query=text,
             top_n=top_n,
             score_threshold=score_threshold,
-            filter_criteria=where_clause
+            filter_criteria=where_clause,
+            timeout=timeout,
         )
 
     @staticmethod
