@@ -140,15 +140,24 @@ class IntelligenceVectorDBEngine:
         """
         filters = []
 
+        # if event_period:
+        #     filters.append({
+        #         "timestamp": {"$gte": event_period[0].timestamp(), "$lte": event_period[1].timestamp()}
+        #         # "pub_timestamp": {"$gte": event_period[0].timestamp(), "$lte": event_period[1].timestamp()}
+        #     })
+        #
+        # if archive_period:
+        #     filters.append({
+        #         "archived_timestamp": {"$gte": archive_period[0].timestamp(), "$lte": archive_period[1].timestamp()}
+        #     })
+
         if event_period:
-            filters.append({
-                "pub_timestamp": {"$gte": event_period[0].timestamp(), "$lte": event_period[1].timestamp()}
-            })
+            filters.append({"timestamp": {"$gte": event_period[0].timestamp()}})
+            filters.append({"timestamp": {"$lte": event_period[1].timestamp()}})
 
         if archive_period:
-            filters.append({
-                "archived_timestamp": {"$gte": archive_period[0].timestamp(), "$lte": archive_period[1].timestamp()}
-            })
+            filters.append({"archived_timestamp": {"$gte": archive_period[0].timestamp()}})
+            filters.append({"archived_timestamp": {"$lte": archive_period[1].timestamp()}})
 
         if rate_class:
             filters.append({"max_rate_class": rate_class})
@@ -169,3 +178,21 @@ class IntelligenceVectorDBEngine:
             score_threshold=score_threshold,
             filter_criteria=where_clause
         )
+
+    @staticmethod
+    def build_search_text(intelligence_dict: Dict[str, Any], data_type: str = 'summary') -> str:
+        """
+        统一的特征文本构建器：将外部字典转换为向量引擎所需的标准文本。
+        """
+        if data_type == 'summary':
+            text_parts = [
+                intelligence_dict.get('EVENT_TITLE', ''),
+                intelligence_dict.get('EVENT_BRIEF', ''),
+                intelligence_dict.get('EVENT_TEXT', '')
+            ]
+            full_text = "\n\n".join([str(t) for t in text_parts if t and str(t).strip()])
+        else:
+            raw = intelligence_dict.get('RAW_DATA') or {}
+            full_text = raw.get('content', '') or intelligence_dict.get('content', '')
+
+        return full_text
