@@ -140,22 +140,30 @@
         }
     }
 
-    function startPolling(threadId) {
+function startPolling(threadId) {
         if (pollInterval) clearInterval(pollInterval);
 
         pollInterval = setInterval(async () => {
             try {
-                const response = await fetch(`/intelligence/graph/status/${threadId}`);
+                // 💡 修复点 1：在 URL 结尾加上时间戳，彻底打穿浏览器 GET 缓存！
+                const response = await fetch(`/intelligence/graph/status/${threadId}?_t=${new Date().getTime()}`);
                 const data = await response.json();
 
                 if (data.status === 'PROCESSING') {
-                    updateStatus("正在通过多维软打分算法执行双向时间窗检索...", "info");
+                    const nodeCount = data.nodes ? data.nodes.length : 0;
+                    updateStatus(`正在进行深度推演... 已发现 ${nodeCount} 个关键节点，图谱生长中...`, "info");
+
+                    // 💡 修复点 2：只要发现有节点，立刻调用渲染函数，并告诉它是半成品 (isProcessing = true)
+                    if (nodeCount > 0) {
+                        renderResults(data, true);
+                    }
                 } else if (data.status === 'ANALYZING') {
-                    updateStatus("图谱已生成！正在呼叫大模型进行逻辑审查与态势总结...", "warning");
+                    updateStatus(`发现 ${data.nodes.length} 个节点，推演完成！正在呼叫大模型进行全盘逻辑审查与总结...`, "warning");
+                    renderResults(data, true); // 保持图谱展示
                 } else if (data.status === 'COMPLETED') {
                     clearInterval(pollInterval);
-                    updateStatus("推演完成！", "success", false);
-                    renderResults(data);
+                    updateStatus("推演与态势总结已全部完成！", "success", false);
+                    renderResults(data, false); // 最终渲染，关闭 Loading
                     document.getElementById('btnGenerate').disabled = false;
                 } else if (data.status === 'REJECTED' || data.status === 'FAILED') {
                     clearInterval(pollInterval);
@@ -182,9 +190,13 @@
         }
     }
 
-    function renderResults(data) {
+    function renderResults(data, isProcessing = false) {
         document.getElementById('resultArea').classList.remove('d-none');
-        document.getElementById('statusArea').classList.add('d-none');
+
+        // 只有当全部完成时，才隐藏顶部的状态栏
+        if (!isProcessing) {
+            document.getElementById('statusArea').classList.add('d-none');
+        }
 
         // 1. 渲染 AI 评估报告 (如果有)
         if (data.llm_summary) {
@@ -202,7 +214,7 @@
         // 3. 渲染关系图谱 (延迟渲染以确保 DOM 可见，防止 ECharts 计算高度错误)
         setTimeout(() => {
             renderGraph(data.nodes, data.edges, data.seed_uuid);
-        }, 200);
+        }, 100);
     }
 
     function renderTimeline(nodes) {
@@ -238,7 +250,7 @@
 
     function renderGraph(nodesData, edgesData, seedUuid) {
         const chartDom = document.getElementById('graph-container');
-        if (myChart != null) { myChart.dispose(); } // 销毁旧实例
+        if (myChart != null) { myChart = echarts.init(chartDom); } // 销毁旧实例
         myChart = echarts.init(chartDom);
 
         // 转换 Nodes 数据给 ECharts

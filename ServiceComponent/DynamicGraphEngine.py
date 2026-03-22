@@ -151,6 +151,7 @@ class DynamicGraphEngine:
     # ---------------------------------------------------------
     # Core Pipeline: 在后台线程中执行的具体算法
     # ---------------------------------------------------------
+
     def _run_snowballing_pipeline(self, thread_id: str, seed_uuid: str, max_depth: int, window_days: int):
         logger.info(f"[{thread_id}] Starting bidirectional graph build for seed: {seed_uuid}")
         try:
@@ -161,7 +162,7 @@ class DynamicGraphEngine:
 
             seed_time = self._get_timestamp(seed_doc)
 
-            # 【修复点】：为本次推演生成专属的“时代拦截黑名单”，防止未来词汇污染历史推演
+            # 生成专属“时代拦截黑名单”
             era_stop_entities = self._refresh_dynamic_stop_entities(base_time=seed_time, days_back=30)
 
             nodes_dict: Dict[str, GraphNode] = {}
@@ -171,19 +172,23 @@ class DynamicGraphEngine:
             nodes_dict[seed_uuid] = self._create_graph_node(seed_doc, is_seed=True)
             current_entities_pool = self._extract_rare_entities(seed_doc, era_stop_entities)
 
-            # 【修复点】：调用底层引擎标准的 build_search_text 方法
             seed_text = self.vector_engine.build_search_text(seed_doc, data_type='summary')
 
             # 探索队列: (当前UUID, 参考时间, 用于检索的Text, 当前深度)
             exploration_queue = [(seed_uuid, seed_time, seed_text, 0)]
 
             # --- 算法调控参数 ---
-            MAX_BRANCHES_PER_NODE = 3  # 每层最多保留 3 个最强分支，防止指数爆炸
-            ECHO_TIME_WINDOW_SEC = 3 * 24 * 3600  # 回声消除判定窗口 (3天)
-            ECHO_VECTOR_SIM_THRESHOLD = 0.88  # 回声消除判定阈值 (向量极度相似)
+            MAX_BRANCHES_PER_NODE = 2
+            ECHO_TIME_WINDOW_SEC = 3 * 24 * 3600
+            ECHO_VECTOR_SIM_THRESHOLD = 0.88
 
             # 2. 开始 N 轮深度迭代 (BFS)
             while exploration_queue:
+                # 🚨 防爆破断路器
+                if len(nodes_dict) >= 50:
+                    logger.warning(f"[{thread_id}] 节点数已达 50 个上限，触发熔断，提前结束搜索。")
+                    break
+
                 current_uuid, current_time, current_text, depth = exploration_queue.pop(0)
 
                 if depth >= max_depth:
@@ -203,14 +208,13 @@ class DynamicGraphEngine:
                 )
 
                 # --- A. VectorDB 宽泛召回 ---
-                # 【修复点】：移除底层 event_period，靠语义大量捞人，把时空错位的数据交给内存过滤
                 candidates = self.vector_engine.query(
                     text=current_text,
-                    top_n=300,
+                    top_n=150,
                     score_threshold=0.50
                 )
 
-                # --- B. 批量获取 MongoDB 数据 (性能优化：消除 N+1 查询) ---
+                # --- B. 批量获取 MongoDB 数据 ---
                 cand_uuids = [c.get("doc_id") for c in candidates if
                               c.get("doc_id") and c.get("doc_id") not in visited_uuids]
                 if not cand_uuids:
@@ -219,7 +223,6 @@ class DynamicGraphEngine:
                 cand_docs_list = self.query_engine.get_intelligence(cand_uuids, light_weight=True)
                 cand_docs_dict = {doc['UUID']: doc for doc in cand_docs_list if doc}
 
-                current_round_passed = []
                 # --- C. 内存精算与多维软打分 ---
                 current_round_passed = []
 
@@ -237,7 +240,6 @@ class DynamicGraphEngine:
                     if not (dt_start.timestamp() <= cand_time <= dt_end.timestamp()):
                         continue
 
-                    # 💡 提取标准化的字符串日期 (如 "2024-02-16")
                     cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
                         '%Y-%m-%d')
 
@@ -248,14 +250,13 @@ class DynamicGraphEngine:
                     )
 
                     if score >= self.THRESHOLD_SCORE:
-                        # 把 cand_time_str 一起塞进元组，方便后面做绝对比对
                         current_round_passed.append(
                             (cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim, cand_time_str))
 
-                # 🔪 排序
+                # 排序（按总分降序）
                 current_round_passed.sort(key=lambda x: x[3], reverse=True)
 
-                # 🔪 排队安检
+                # --- D. 排队安检，逐个入库 ---
                 accepted_this_round = 0
                 for cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim, cand_time_str in current_round_passed:
                     if accepted_this_round >= MAX_BRANCHES_PER_NODE:
@@ -263,19 +264,18 @@ class DynamicGraphEngine:
 
                     is_echo = False
                     for existing_node in nodes_dict.values():
-                        # 🚨 拦截网 1：绝对字符串相等！只要日期字符串一样，绝对砍掉！没有任何时区/浮点数漏洞！
+                        # 拦截网 1：绝对字符串相等
                         if cand_time_str == existing_node.incident_time:
                             is_echo = True
                             break
 
-                        # 🚨 拦截网 2：三天高相似度跟风去重
+                        # 拦截网 2：三天高相似度跟风去重
                         exist_dt_str = existing_node.incident_time
                         if exist_dt_str:
                             try:
                                 exist_dt = datetime.datetime.strptime(exist_dt_str, "%Y-%m-%d").replace(
                                     tzinfo=datetime.timezone.utc)
-                                if abs(cand_time - exist_dt.timestamp()) <= (
-                                        3 * 24 * 3600) and cand_vec_sim >= 0.75:
+                                if abs(cand_time - exist_dt.timestamp()) <= (3 * 24 * 3600) and cand_vec_sim >= 0.75:
                                     is_echo = True
                                     break
                             except ValueError:
@@ -283,14 +283,11 @@ class DynamicGraphEngine:
 
                     if is_echo:
                         logger.info(f"  🔕 [ECHO] 绝对同日或高相似跟风，已折叠: {cand_uuid}")
-                        # 吸收实体
                         current_entities_pool.update(self._extract_rare_entities(cand_doc, era_stop_entities))
                         continue
 
                     # 安检通过，真正拉入图谱！
                     title = cand_doc.get("EVENT_TITLE", "")[:15] + "..."
-                    cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
-                        '%Y-%m-%d')
                     logger.info(f"  ✅ [LINKED] [{cand_time_str}] {title} | 总分: {score:.2f} | 依据: {reason}")
 
                     visited_uuids.add(cand_uuid)
@@ -305,35 +302,16 @@ class DynamicGraphEngine:
 
                     accepted_this_round += 1
 
-                # --- 🔪 第二刀：控制分支因子 (Branching Factor Top-K 剪枝) ---
-                current_round_passed.sort(key=lambda x: x[3], reverse=True)  # 按总分降序
-                top_k_passed = current_round_passed[:MAX_BRANCHES_PER_NODE]
+                # 实时流式刷入数据库
+                # 只要本轮有新节点加入，就刷入一次数据库更新前台状态
+                if accepted_this_round > 0:
+                    current_nodes = sorted(list(nodes_dict.values()),
+                                           key=lambda x: x.incident_time if x.incident_time else "")
+                    self._update_snapshot_status(thread_id, current_nodes, edges_list, "PROCESSING")
 
-                for cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim, cand_time_str in top_k_passed:
-                    title = cand_doc.get("EVENT_TITLE", "")[:15] + "..."
-                    cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
-                        '%Y-%m-%d')
-                    logger.info(f"  ✅ [LINKED] [{cand_time_str}] {title} | 总分: {score:.2f} | 依据: {reason}")
-
-                    visited_uuids.add(cand_uuid)
-                    nodes_dict[cand_uuid] = self._create_graph_node(cand_doc)
-                    edges_list.append(GraphEdge(
-                        source_uuid=current_uuid,
-                        target_uuid=cand_uuid,
-                        score=score,
-                        connection_reason=reason
-                    ))
-
-                    # 构建下一次查询的特征文本并加入队列
-                    next_text = self.vector_engine.build_search_text(cand_doc, data_type='summary')
-                    exploration_queue.append((cand_uuid, cand_time, next_text, depth + 1))
-
-                    # 特征演化：吸收新节点的实体
-                    current_entities_pool.update(self._extract_rare_entities(cand_doc, era_stop_entities))
-
-                if len(current_round_passed) > MAX_BRANCHES_PER_NODE:
-                    logger.info(
-                        f"  ✂️ [PRUNED] 分支剪枝：已裁掉 {len(current_round_passed) - MAX_BRANCHES_PER_NODE} 个长尾节点，防指数爆炸。")
+                # 强制挂起当前线程 50 毫秒，主动交出 Python GIL 锁！
+                # 这点时间对总推演时长微乎其微，但能让 Flask Web 线程瞬间复活，从容处理前端的 /status 轮询！
+                time.sleep(0.05)
 
             # 3. 排序与结构化
             sorted_nodes = sorted(list(nodes_dict.values()), key=lambda x: x.incident_time if x.incident_time else "")
