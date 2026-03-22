@@ -159,28 +159,29 @@ class DynamicGraphEngine:
             if not seed_doc:
                 raise ValueError(f"Seed UUID {seed_uuid} not found in MongoDB.")
 
-            # 初始化图结构和追踪池
-            nodes_dict: Dict[str, GraphNode] = {}
-            edges_list: List[GraphEdge] = []
-
-            # 将种子节点加入图
-            nodes_dict[seed_uuid] = self._create_graph_node(seed_doc, is_seed=True)
-            current_entities_pool = self._extract_rare_entities(seed_doc)
-
             seed_time = self._get_timestamp(seed_doc)
 
-            # 为这次推演临时生成专属的时代黑名单
-            self.current_era_stop_entities = self._refresh_dynamic_stop_entities(base_time=seed_time, days_back=30)
+            # 【修复点】：为本次推演生成专属的“时代拦截黑名单”，防止未来词汇污染历史推演
+            era_stop_entities = self._refresh_dynamic_stop_entities(base_time=seed_time, days_back=30)
 
-            # 探索队列: (当前UUID, 当前参考时间, 当前内容(用于检索), 当前跳数)
-            exploration_queue = [(
-                seed_uuid,
-                seed_time,
-                IntelligenceVectorDBEngine.build_search_text(seed_doc, 'summary'), 0
-            )]
+            nodes_dict: Dict[str, GraphNode] = {}
+            edges_list: List[GraphEdge] = []
             visited_uuids = {seed_uuid}
 
-            # 2. 开始 N 轮深度迭代 (BFS)
+            nodes_dict[seed_uuid] = self._create_graph_node(seed_doc, is_seed=True)
+            current_entities_pool = self._extract_rare_entities(seed_doc, era_stop_entities)
+
+            # 【修复点】：调用底层引擎标准的 build_search_text 方法
+            seed_text = self.vector_engine.build_search_text(seed_doc, data_type='summary')
+
+            # 探索队列: (当前UUID, 参考时间, 用于检索的Text, 当前深度)
+            exploration_queue = [(seed_uuid, seed_time, seed_text, 0)]
+
+            # --- 算法调控参数 ---
+            MAX_BRANCHES_PER_NODE = 3  # 每层最多保留 3 个最强分支，防止指数爆炸
+            ECHO_TIME_WINDOW_SEC = 3 * 24 * 3600  # 回声消除判定窗口 (3天)
+            ECHO_VECTOR_SIM_THRESHOLD = 0.88  # 回声消除判定阈值 (向量极度相似)
+
             # 2. 开始 N 轮深度迭代 (BFS)
             while exploration_queue:
                 current_uuid, current_time, current_text, depth = exploration_queue.pop(0)
@@ -188,55 +189,58 @@ class DynamicGraphEngine:
                 if depth >= max_depth:
                     continue
 
-                # 将时间戳转换为可读的 datetime
                 dt_center = datetime.datetime.fromtimestamp(current_time, tz=datetime.timezone.utc)
                 dt_start = dt_center - datetime.timedelta(days=window_days)
                 dt_end = dt_center + datetime.timedelta(days=window_days)
 
-                # ==========================================
-                # 💡 [日志增强]：打印当前探索节点的全景信息
-                # ==========================================
                 logger.info(
                     f"\n{'=' * 60}\n"
                     f"🔍 [Depth {depth + 1}/{max_depth}] 探索起点: {current_uuid}\n"
                     f"📅 中心时间: {dt_center.strftime('%Y-%m-%d %H:%M')}\n"
-                    f"⏳ 检索窗口: [{dt_start.strftime('%Y-%m-%d')}] TO [{dt_end.strftime('%Y-%m-%d')}]\n"
-                    f"🎯 当前追踪实体池: {list(current_entities_pool)}\n"
+                    f"⏳ 逻辑检索窗口: [{dt_start.strftime('%Y-%m-%d')}] TO [{dt_end.strftime('%Y-%m-%d')}]\n"
+                    f"🎯 当前追踪实体池: {list(current_entities_pool)[:8]}...\n"
                     f"{'=' * 60}"
                 )
 
-                # --- A. VectorDB 双向时间窗检索 ---
+                # --- A. VectorDB 宽泛召回 ---
+                # 【修复点】：移除底层 event_period，靠语义大量捞人，把时空错位的数据交给内存过滤
                 candidates = self.vector_engine.query(
                     text=current_text,
-                    top_n=60,
-                    score_threshold=0.50,  # 极低阈值，放水给后端的软打分
-                    # event_period=(dt_start, dt_end),
-                    timeout=180,
+                    top_n=50,  # 捞取50个候选人
+                    score_threshold=0.10  # 极低阈值，将生杀大权交给多维软打分
                 )
 
-                logger.info(
-                    f"📥 VectorDB 在该时间窗内共召回 {len(candidates)} 个初始候选者。开始进入严苛的【多维软打分】阶段...")
+                # --- B. 批量获取 MongoDB 数据 (性能优化：消除 N+1 查询) ---
+                cand_uuids = [c.get("doc_id") for c in candidates if
+                              c.get("doc_id") and c.get("doc_id") not in visited_uuids]
+                if not cand_uuids:
+                    continue
 
-                # --- B. 内存精算与多维软打分 ---
-                accepted_count = 0
+                cand_docs_list = self.query_engine.get_intelligence(cand_uuids, light_weight=True)
+                cand_docs_dict = {doc['UUID']: doc for doc in cand_docs_list if doc}
+
+                current_round_passed = []
+
+                # --- C. 内存精算与多维软打分 ---
                 for cand in candidates:
                     cand_uuid = cand.get("doc_id")
-                    if not cand_uuid or cand_uuid in visited_uuids:
+                    if cand_uuid not in cand_uuids:
                         continue
 
-                    cand_vec_sim = cand.get("score", 0.0)
-
-                    # 补充完整的 MongoDB 实体数据
-                    cand_doc = self.query_engine.get_intelligence(cand_uuid, light_weight=True)
+                    cand_doc = cand_docs_dict.get(cand_uuid)
                     if not cand_doc:
                         continue
 
+                    cand_vec_sim = cand.get("score", 0.0)
                     cand_time = self._get_timestamp(cand_doc)
-                    cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
-                        '%Y-%m-%d')
-                    cand_entities = self._extract_rare_entities(cand_doc)
 
-                    # 核心公式计算
+                    # 严格校验时间窗口 (在内存中做，替代底层的错位 Filter)
+                    if not (dt_start.timestamp() <= cand_time <= dt_end.timestamp()):
+                        continue
+
+                    cand_entities = self._extract_rare_entities(cand_doc, era_stop_entities)
+
+                    # 核心打分公式
                     score, reason = self._calculate_hybrid_score(
                         time_a=current_time,
                         time_b=cand_time,
@@ -245,38 +249,72 @@ class DynamicGraphEngine:
                         cand_entities=cand_entities
                     )
 
-                    # ==========================================
-                    # 💡 [日志增强]：判定过程一览无余
-                    # ==========================================
-                    title = cand_doc.get("EVENT_TITLE", "")[:15] + "..."  # 截断长标题
-                    log_prefix = f"  [{cand_time_str}] {title} ({cand_uuid[:8]}...) "
-
                     if score >= self.THRESHOLD_SCORE:
-                        logger.info(
-                            f"  ✅ [LINKED] {log_prefix}\n      -> 总分: {score:.2f} (≥阈值{self.THRESHOLD_SCORE}) | 依据: {reason}")
-                        visited_uuids.add(cand_uuid)
-                        accepted_count += 1
+                        # --- 回声消除 (Echo Cancellation) 升级版 ---
+                        is_echo = False
+                        for existing_node in nodes_dict.values():
+                            exist_dt_str = existing_node.incident_time
+                            if exist_dt_str:
+                                try:
+                                    exist_dt = datetime.datetime.strptime(exist_dt_str, "%Y-%m-%d").replace(
+                                        tzinfo=datetime.timezone.utc)
+                                    time_diff_sec = abs(cand_time - exist_dt.timestamp())
 
-                        nodes_dict[cand_uuid] = self._create_graph_node(cand_doc)
-                        edges_list.append(GraphEdge(
-                            source_uuid=current_uuid,
-                            target_uuid=cand_uuid,
-                            score=score,
-                            connection_reason=reason
-                        ))
+                                    # 拦截网 1：同日硬去重 (Same-day Deduplication)
+                                    # 如果是同一天（差值 < 24小时），只要讲的是一回事（向量 > 0.65），直接算作重复报道！
+                                    if time_diff_sec <= 24 * 3600 and cand_vec_sim > 0.65:
+                                        is_echo = True
+                                        break
 
-                        # 加入下一轮探索队列
-                        exploration_queue.append(
-                            (cand_uuid, cand_time, IntelligenceVectorDBEngine.build_search_text(cand_doc), depth + 1))
-                        # 特征演化
-                        current_entities_pool.update(cand_entities)
+                                    # 拦截网 2：三天回声消除 (3-Days Echo)
+                                    # 如果是3天内，降低向量阈值到 0.75（容忍不同媒体的用词差异）
+                                    if time_diff_sec <= (3 * 24 * 3600) and cand_vec_sim >= 0.75:
+                                        is_echo = True
+                                        break
+
+                                except ValueError:
+                                    pass
+
+                        if is_echo:
+                            logger.info(f"  🔕 [ECHO] 发现回声报道，折叠跳过: {cand_uuid} (VecSim: {cand_vec_sim:.2f})")
+                            continue
+
+                        # 加入合格候选区
+                        current_round_passed.append((cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim))
                     else:
-                        # 对于被拒绝的，只打印那些向量明明很相似（>0.6）但由于各种原因被斩断的，减少刷屏
+                        # 对于被拒绝的节点，只打印那些向量其实很像(>0.6)但总分不够的，用于调参分析
                         if cand_vec_sim > 0.60:
-                            logger.info(
-                                f"  🚫 [REJECT] {log_prefix}\n      -> 总分: {score:.2f} (<阈值{self.THRESHOLD_SCORE}) | 死因: {reason}")
+                            logger.debug(f"  🚫 [REJECT] {cand_uuid} | 总分 {score:.2f} < 阈值 | 死因: {reason}")
 
-                logger.info(f"🏁 本轮探索结束。成功采纳 {accepted_count} 个节点进入脉络。")
+                # --- 🔪 第二刀：控制分支因子 (Branching Factor Top-K 剪枝) ---
+                current_round_passed.sort(key=lambda x: x[3], reverse=True)  # 按总分降序
+                top_k_passed = current_round_passed[:MAX_BRANCHES_PER_NODE]
+
+                for cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim in top_k_passed:
+                    title = cand_doc.get("EVENT_TITLE", "")[:15] + "..."
+                    cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
+                        '%Y-%m-%d')
+                    logger.info(f"  ✅ [LINKED] [{cand_time_str}] {title} | 总分: {score:.2f} | 依据: {reason}")
+
+                    visited_uuids.add(cand_uuid)
+                    nodes_dict[cand_uuid] = self._create_graph_node(cand_doc)
+                    edges_list.append(GraphEdge(
+                        source_uuid=current_uuid,
+                        target_uuid=cand_uuid,
+                        score=score,
+                        connection_reason=reason
+                    ))
+
+                    # 构建下一次查询的特征文本并加入队列
+                    next_text = self.vector_engine.build_search_text(cand_doc, data_type='summary')
+                    exploration_queue.append((cand_uuid, cand_time, next_text, depth + 1))
+
+                    # 特征演化：吸收新节点的实体
+                    current_entities_pool.update(self._extract_rare_entities(cand_doc, era_stop_entities))
+
+                if len(current_round_passed) > MAX_BRANCHES_PER_NODE:
+                    logger.info(
+                        f"  ✂️ [PRUNED] 分支剪枝：已裁掉 {len(current_round_passed) - MAX_BRANCHES_PER_NODE} 个长尾节点，防指数爆炸。")
 
             # 3. 排序与结构化
             sorted_nodes = sorted(list(nodes_dict.values()), key=lambda x: x.incident_time if x.incident_time else "")
@@ -321,18 +359,15 @@ class DynamicGraphEngine:
 
         return total_score, " | ".join(reason_parts)
 
-    def _extract_rare_entities(self, doc: dict) -> Set[str]:
+    def _extract_rare_entities(self, doc: dict, stop_entities: Set[str]) -> Set[str]:
         """提取实体并过滤动态高频词"""
         entities = set()
         people = doc.get("PEOPLE") or []
         orgs = doc.get("ORGANIZATION") or []
         locs = doc.get("LOCATION") or []
 
-        # 获取当前最新的动态高频词
-        stop_words = self.dynamic_stop_entities
-
         for e in (people + orgs + locs):
-            if isinstance(e, str) and e.strip() and e not in stop_words:
+            if isinstance(e, str) and e.strip() and e not in stop_entities:
                 entities.add(e)
         return entities
 
