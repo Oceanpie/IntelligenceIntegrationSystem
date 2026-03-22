@@ -190,7 +190,7 @@ class DynamicGraphEngine:
 
                 # 将时间戳转换为可读的 datetime
                 dt_center = datetime.datetime.fromtimestamp(current_time, tz=datetime.timezone.utc)
-                dt_start = dt_center - datetime.timedelta(days=window_days)f2e0a299-51b3-415c-ac42-3193e73ffbd5
+                dt_start = dt_center - datetime.timedelta(days=window_days)
                 dt_end = dt_center + datetime.timedelta(days=window_days)
 
                 # ==========================================
