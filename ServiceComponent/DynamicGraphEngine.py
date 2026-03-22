@@ -68,8 +68,8 @@ class DynamicGraphEngine:
     # --- 软打分公式权重配置 (可根据实际数据表现微调) ---
     WEIGHT_VECTOR = 0.60  # 向量相似度权重 (VectorDB 返回的 score)
     WEIGHT_ENTITY = 0.40  # 罕见实体交集权重
-    TIME_DECAY_RATE = 0.05  # # 每天扣 0.05 分，如果相差 1 年 (365天)，会扣 18 分
-    THRESHOLD_SCORE = 0.60  # 综合得分阈值，低于此分数不建立边
+    TIME_DECAY_RATE = 0.008  # 从0.05改为0.008（相差10天扣0.08分，1个月扣0.24分），允许挖掘长线情报
+    THRESHOLD_SCORE = 0.55  # 综合得分阈值，低于此分数不建立边
 
     # --- TF-IDF 实体黑名单 (防止超级节点污染图谱) ---
     # 理想情况下，这应该是一个定时从数据库统计生成的集合，这里提供基础内置名单
@@ -206,8 +206,8 @@ class DynamicGraphEngine:
                 # 【修复点】：移除底层 event_period，靠语义大量捞人，把时空错位的数据交给内存过滤
                 candidates = self.vector_engine.query(
                     text=current_text,
-                    top_n=50,  # 捞取50个候选人
-                    score_threshold=0.10  # 极低阈值，将生杀大权交给多维软打分
+                    top_n=300,
+                    score_threshold=0.50
                 )
 
                 # --- B. 批量获取 MongoDB 数据 (性能优化：消除 N+1 查询) ---
@@ -220,8 +220,9 @@ class DynamicGraphEngine:
                 cand_docs_dict = {doc['UUID']: doc for doc in cand_docs_list if doc}
 
                 current_round_passed = []
-
                 # --- C. 内存精算与多维软打分 ---
+                current_round_passed = []
+
                 for cand in candidates:
                     cand_uuid = cand.get("doc_id")
                     if cand_uuid not in cand_uuids:
@@ -233,64 +234,82 @@ class DynamicGraphEngine:
 
                     cand_vec_sim = cand.get("score", 0.0)
                     cand_time = self._get_timestamp(cand_doc)
-
-                    # 严格校验时间窗口 (在内存中做，替代底层的错位 Filter)
                     if not (dt_start.timestamp() <= cand_time <= dt_end.timestamp()):
                         continue
 
-                    cand_entities = self._extract_rare_entities(cand_doc, era_stop_entities)
+                    # 💡 提取标准化的字符串日期 (如 "2024-02-16")
+                    cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
+                        '%Y-%m-%d')
 
-                    # 核心打分公式
+                    cand_entities = self._extract_rare_entities(cand_doc, era_stop_entities)
                     score, reason = self._calculate_hybrid_score(
-                        time_a=current_time,
-                        time_b=cand_time,
-                        vec_sim=cand_vec_sim,
-                        entities_pool=current_entities_pool,
-                        cand_entities=cand_entities
+                        time_a=current_time, time_b=cand_time, vec_sim=cand_vec_sim,
+                        entities_pool=current_entities_pool, cand_entities=cand_entities
                     )
 
                     if score >= self.THRESHOLD_SCORE:
-                        # --- 回声消除 (Echo Cancellation) 升级版 ---
-                        is_echo = False
-                        for existing_node in nodes_dict.values():
-                            exist_dt_str = existing_node.incident_time
-                            if exist_dt_str:
-                                try:
-                                    exist_dt = datetime.datetime.strptime(exist_dt_str, "%Y-%m-%d").replace(
-                                        tzinfo=datetime.timezone.utc)
-                                    time_diff_sec = abs(cand_time - exist_dt.timestamp())
+                        # 把 cand_time_str 一起塞进元组，方便后面做绝对比对
+                        current_round_passed.append(
+                            (cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim, cand_time_str))
 
-                                    # 拦截网 1：同日硬去重 (Same-day Deduplication)
-                                    # 如果是同一天（差值 < 24小时），只要讲的是一回事（向量 > 0.65），直接算作重复报道！
-                                    if time_diff_sec <= 24 * 3600 and cand_vec_sim > 0.65:
-                                        is_echo = True
-                                        break
+                # 🔪 排序
+                current_round_passed.sort(key=lambda x: x[3], reverse=True)
 
-                                    # 拦截网 2：三天回声消除 (3-Days Echo)
-                                    # 如果是3天内，降低向量阈值到 0.75（容忍不同媒体的用词差异）
-                                    if time_diff_sec <= (3 * 24 * 3600) and cand_vec_sim >= 0.75:
-                                        is_echo = True
-                                        break
+                # 🔪 排队安检
+                accepted_this_round = 0
+                for cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim, cand_time_str in current_round_passed:
+                    if accepted_this_round >= MAX_BRANCHES_PER_NODE:
+                        break
 
-                                except ValueError:
-                                    pass
+                    is_echo = False
+                    for existing_node in nodes_dict.values():
+                        # 🚨 拦截网 1：绝对字符串相等！只要日期字符串一样，绝对砍掉！没有任何时区/浮点数漏洞！
+                        if cand_time_str == existing_node.incident_time:
+                            is_echo = True
+                            break
 
-                        if is_echo:
-                            logger.info(f"  🔕 [ECHO] 发现回声报道，折叠跳过: {cand_uuid} (VecSim: {cand_vec_sim:.2f})")
-                            continue
+                        # 🚨 拦截网 2：三天高相似度跟风去重
+                        exist_dt_str = existing_node.incident_time
+                        if exist_dt_str:
+                            try:
+                                exist_dt = datetime.datetime.strptime(exist_dt_str, "%Y-%m-%d").replace(
+                                    tzinfo=datetime.timezone.utc)
+                                if abs(cand_time - exist_dt.timestamp()) <= (
+                                        3 * 24 * 3600) and cand_vec_sim >= 0.75:
+                                    is_echo = True
+                                    break
+                            except ValueError:
+                                pass
 
-                        # 加入合格候选区
-                        current_round_passed.append((cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim))
-                    else:
-                        # 对于被拒绝的节点，只打印那些向量其实很像(>0.6)但总分不够的，用于调参分析
-                        if cand_vec_sim > 0.60:
-                            logger.debug(f"  🚫 [REJECT] {cand_uuid} | 总分 {score:.2f} < 阈值 | 死因: {reason}")
+                    if is_echo:
+                        logger.info(f"  🔕 [ECHO] 绝对同日或高相似跟风，已折叠: {cand_uuid}")
+                        # 吸收实体
+                        current_entities_pool.update(self._extract_rare_entities(cand_doc, era_stop_entities))
+                        continue
+
+                    # 安检通过，真正拉入图谱！
+                    title = cand_doc.get("EVENT_TITLE", "")[:15] + "..."
+                    cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
+                        '%Y-%m-%d')
+                    logger.info(f"  ✅ [LINKED] [{cand_time_str}] {title} | 总分: {score:.2f} | 依据: {reason}")
+
+                    visited_uuids.add(cand_uuid)
+                    nodes_dict[cand_uuid] = self._create_graph_node(cand_doc)
+                    edges_list.append(GraphEdge(
+                        source_uuid=current_uuid, target_uuid=cand_uuid, score=score, connection_reason=reason
+                    ))
+
+                    next_text = self.vector_engine.build_search_text(cand_doc, data_type='summary')
+                    exploration_queue.append((cand_uuid, cand_time, next_text, depth + 1))
+                    current_entities_pool.update(self._extract_rare_entities(cand_doc, era_stop_entities))
+
+                    accepted_this_round += 1
 
                 # --- 🔪 第二刀：控制分支因子 (Branching Factor Top-K 剪枝) ---
                 current_round_passed.sort(key=lambda x: x[3], reverse=True)  # 按总分降序
                 top_k_passed = current_round_passed[:MAX_BRANCHES_PER_NODE]
 
-                for cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim in top_k_passed:
+                for cand_uuid, cand_doc, cand_time, score, reason, cand_vec_sim, cand_time_str in top_k_passed:
                     title = cand_doc.get("EVENT_TITLE", "")[:15] + "..."
                     cand_time_str = datetime.datetime.fromtimestamp(cand_time, tz=datetime.timezone.utc).strftime(
                         '%Y-%m-%d')
