@@ -142,14 +142,34 @@ class MongoDBStorage:
             return conversion_func(data)
         return data
 
+    def _process_objectids_recursive(self, obj):
+        """递归遍历并转换所有的 ObjectId 为字符串"""
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, ObjectId):
+                    obj[k] = str(v)
+                elif isinstance(v, (dict, list)):
+                    self._process_objectids_recursive(v)
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                if isinstance(item, ObjectId):
+                    obj[i] = str(item)
+                elif isinstance(item, (dict, list)):
+                    self._process_objectids_recursive(item)
+        return obj
+
     def process_document_output(self, document: Optional[Dict]) -> Optional[Dict]:
         """Handles common processing for documents coming from the database."""
         if not document:
             return None
-        # Convert _id if it's an ObjectId
-        if '_id' in document and isinstance(document['_id'], ObjectId):
-            document['_id'] = str(document['_id'])
+
+        # 递归转换文档中所有层级的 ObjectId
+        document = self._process_objectids_recursive(document)
+
         # Convert all UTC datetimes to local time
+        # 注意：如果这里的 datetime 没有被转成字符串，后续 jsonify 依然可能报错。
+        # 如果你想在这里顺手把 datetime 也转成字符串（ISO格式），可以把 lambda 改成：
+        # lambda dt: dt.astimezone(LOCAL_TZ).isoformat()
         return self._process_dates_recursive(document, lambda dt: dt.astimezone(LOCAL_TZ))
 
     # --- CRUD Methods ---
