@@ -374,8 +374,6 @@ class IntelligenceHubWebService:
                 if not intelligence:
                     return jsonify({"error": "Intelligence not found"}), 404
 
-                print(DictPrinter.pretty_print(intelligence))
-
                 return jsonify({
                     "success": True,
                     "data": intelligence
