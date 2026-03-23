@@ -276,29 +276,33 @@ python CrawlerServiceEngine.py
 
 > 本程序通过RSS抓取公开新闻，原因在于这类新闻抓取难度小（本身就是给RSS阅读器的公开信息），且法律风险低。对于没有RSS的网站，也支持列表页抓取。
 
-程序中由[CrawlerServiceEngine.py](CrawlerServiceEngine.py)**启动**并驱动[CrawlTasks](CrawlTasks)目录下的抓取模块，
+程序中由[CrawlerServiceEngine.py](CrawlerServiceEngine.py)驱动[CrawlTasks](CrawlTasks)目录下的抓取模块。
 > 
 > 该服务框架会监控该目录下的文件更新并重新加载更新后的模块。
 > 
 
-当前各个抓取模块主要通过[CommonFeedsCrawFlow.py](Workflow/RssFeedsBasedCrawlFlow.py)这个通用流程进行抓取并将抓取内容提交到IntelligenceHub。
+抓取模块事实上基于两个框架：
+
++ 之前的简易框架：[RssFeedsBasedCrawlFlow.py](Workflow/RssFeedsBasedCrawlFlow.py)
 > 
 > 抓取模块通过partial构建偏函数供抓取流程调用。
 >
-> 实际上采集数据只需要按照 ```class CollectedData``` 定义格式将数据通过 POST 提交到 ```/collect``` 这个端点的网络服务即可。
-> 唯一需要注意的是如果设置了安全Token，则提交数据时要将该凭据附上。至于数据的来源，IHub并不关心。
+
++ 新的AIClientCenter框架：[AIClientCenter](AIClientCenter)
 > 
-> 使用通用流程的好处在于增加一个RSS源抓取非常方便，并且通用流程中实现了抓取记录和防重复抓取的功能。
-> 
-> 如果想抓取非RSS源，或者需要抓取的网页需要特殊技术，则需要自己实现抓取器。同时注意法律风险。
+> 通过[CrawlerPlayground.py](IntelligenceCrawler/CrawlerPlayground.py)可视化生成抓取代码，
+> 通过[IntelligenceCrawlFlow.py](Workflow/IntelligenceCrawlFlow.py)适配IIS抓取与提交流程。
 > 
 
-当前实现的抓取方式有：
-
-+ [RequestsScraper.py](Scraper/RequestsScraper.py)：用以抓取简单的内容。最快，但对于动态网页来说抓取不到。
-+ [PlaywrightRawScraper.py](Scraper/PlaywrightRawScraper.py)：使用Playwright的无头浏览器抓取 ，速度一般，能抓取到一些requests抓取不到的网页。
-+ [PlaywrightRenderedScraper.py](Scraper/PlaywrightRenderedScraper.py)：同是无头浏览器方案，但等待网页渲染完成，最慢，但成功率最高。
-+ [Crawl4AI.py](Scraper/Crawl4AI.py)：未实现。
+无论是哪个框架，最终都通过 [CommonFlowUtility.py](Workflow/CommonFlowUtility.py) 将抓取到的内容提交到IntelligenceHub。
+> 
+> 实际上采集数据只需要按照 ```class CollectedData``` 定义的格式将数据通过 POST 提交到IHub的 ```/collect``` 端点即可，无论采用什么方式抓取。
+> 唯一需要注意的是如果设置了安全Token，则提交数据时要将该凭据附上。至于数据的来源，IHub并不关心，抓取服务和IHub也不一定要运行在同一台电脑上。
+> 
+> 使用通用流程的好处在于增加一个抓取任务非常方便，并且通用流程中实现了抓取记录和防重复抓取的功能。
+> 
+> 如果需要抓取的网页需要特殊技术，则需要自己实现抓取器。同时注意法律风险。
+>
 
 ### IntelligenceHub
 
@@ -318,32 +322,39 @@ python CrawlerServiceEngine.py
 
 ### 分析
 
-+ [prompts.py](prompts_v1x.py)
++ [prompts_v2x.py](prompts_v2x.py)
 
-情报分析的所有prompt。程序中的dict校验和该prompt指示的输出格式紧密相关，如果prompt改变，那么校验规则同样需要改变。
++ [ServiceComponent/IntelligenceHubDefines_v2.py](ServiceComponent/IntelligenceHubDefines_v2.py)
 
-已知的问题为：
-
-1. 该prompt在小模型（甚至于65b）上表现不佳。
-> 
-> 在小模型上AI通常不按规定格式输出，有可能是prompt + 文章内容太长，使AI无法集中注意力的缘故。
-> 
-> 正式部署的环境使用的是满血云服务，这是一笔不小的开支。
-> 
-
-2. AI评分还是过于宽松，没有达到我的期望。
-> 
-> 对于一些非情报新闻，AI还是给出了6分的评价，尽管我在prompt中强调不含情报的数据应该抛弃，但效果不佳。
-> 
-> 对于情报的评分偏高，我理想中80%的新闻应当处于6分及以下的区间。
-> 
+  情报分析的prompt以及格式定义。程序中的dict校验和该prompt指示的输出格式紧密相关，prompt对AI的要求必须遵守校验规则。
+  
+  已知的问题为：
+  
+  1. 该prompt在小模型（甚至于65b）上表现不佳。
+  > 
+  > 在小模型上AI通常不按规定格式输出，有可能是prompt + 文章内容太长，使AI无法集中注意力的缘故。
+  > 
+  > 正式部署的环境使用的是满血云服务，这是一笔不小的开支。
+  > 
+  
+  2. AI评分还是过于宽松，没有达到我的期望。
+  >
+  > 
+  > 对于情报的评分偏高，我理想中80%的新闻应当处于6分及以下的区间。
+  > 
+  
+  3. AI偶尔会不按要求输出非中文内容。
+  >
+  > 
+  > 通过增加翻译模块解决。
+  > 
 
 + [IntelligenceAnalyzerProxy.py](ServiceComponent/IntelligenceAnalyzerProxy.py)
->
-> AI分析实现的主要文件。调用AI Client，组织数据、使用prompt进行分析，并解析和返回结果。
-> 
-> 值得一提的是，自从使用了json_repair后，python的解析率几乎100%。接下来我会尝试在小模型上使用constrained decoding，看是否能提升表现。
->
+
+  > AI分析实现的主要文件。调用AI Client，组织数据、使用prompt进行分析，并解析和返回结果。
+  > 
+  > 值得一提的是，自从使用了json_repair后，python的解析率几乎100%。接下来我会尝试在小模型上使用constrained decoding，看是否能提升表现。
+  >
 
 ### 内容发布
 
@@ -368,17 +379,21 @@ python CrawlerServiceEngine.py
     > 不使用前后端的架构，所有内容由服务器生成。包括以下文件：
     > 
     > [PostManager.py](ServiceComponent/PostManager.py)：根据 [posts](posts) 目录下的markdown文件生成HTML。
+    > > [posts/index.md](posts/index.md)：公共主页
+    > > 
+    > > [posts/index_public.md](posts/index_public.md)：后台管理主页
     > 
-    > [ArticleRender.py](recycled/ArticleRender.py)：文章页面。
+    > [intelligence_detail.html](templates/intelligence_detail.html)：文章详情页。
     > 
-    > [ArticleListRender.py](recycled/ArticleListRender.py)：文章列表页面。
+    > [intelligence_list.html](templates/intelligence_list.html)：文章列表页。
     > 
-    > [intelligence_search.html](templates/intelligence_search.html)：文章查询页面（20251029：重构为前后端分离）。
+    > [intelligence_cluster_list.html](templates/intelligence_cluster_list.html)：文章聚合页。
     > 
-    > （旧）[ArticleTableRender.py](recycled/ArticleTableRender.py)：文章列表项。
-    > （新）[intelligence_table.js](static/js/intelligence_table.js)：文章列表项。
+    > [intelligence_search.html](templates/intelligence_search.html)：文章查询页。
     > 
-    > 子功能页面，由对应模块提供，前后端分离。这里就不列出了，详见登录后的管理页面。
+    > [intelligence_graph.html](templates/intelligence_graph.html)：文章态势追踪页。
+    > 
+    > 子功能页面，由对应模块提供，这里就不再一一列出，详见登录后的管理页面。
     > 
 
 ### 存储
