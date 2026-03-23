@@ -391,45 +391,44 @@ python CrawlerServiceEngine.py
     > 
     > [intelligence_search.html](templates/intelligence_search.html)：文章查询页。
     > 
-    > [intelligence_graph.html](templates/intelligence_graph.html)：文章态势追踪页。
+    > [intelligence_graph.html](templates/intelligence_graph.html)：情报态势追踪页。
     > 
     > 子功能页面，由对应模块提供，这里就不再一一列出，详见登录后的管理页面。
     > 
 
-### 存储
+### 存储与目录结构
 
-程序会生成以下内容：
+#### 目录结构
+
+为了方便docker等部署需要，本项目将程序和数据分离。数据按其属性置于以下目录中：
+
++ [_config](_config)
+> 配置文件，由用户手动编辑。
+
++ [_data](_data)
+> 程序产生或暂存的数据，不要手动编辑。是最重要的目录，也是重点需要备份的目录。包含以下内容：
+> + 向量数据库文件
+> + 聚类记录
+> + 爬虫抓取记录
+> + AI客户端管理相关文件
+
++ [_export](_export)
+> 程序导出的数据，比如数据库文件。
+
++ [_log](_log)
+> 程序的log文件，历史log会自动归档和管理。
+
++ [_products](_products)
+> 程序的产物目录，预留。
+
+#### 数据库存储
 
 + 情报存储（主要）
-  > MongoDB，数据库名：IntelligenceIntegrationSystem。包含三个记录：
+  > MongoDB，默认数据库名：IntelligenceIntegrationSystem。包含以下记录：
   > + intelligence_cached：Collector提交的采集到的原始新闻数据。
   > + intelligence_archived：经过处理并归档的数据。
-  > + 
-
-+ 向量数据库
-  > 供向量查询，保留。
-  > 
-  > 如果开启，会存储于：[IntelligenceIndex](IntelligenceIndex)目录
-
-+ 鉴权信息
-  > 文件：[Authentication.db](Authentication.db)
-  > 
-  > 供 [UserManager.py](ServiceComponent/UserManager.py) 使用，可通过 [UserManagerConsole.py](Scripts/UserManagerConsole.py) 工具进行管理。
-
-+ 抓取内容
-  > 目录：[content_storage](content_storage)
-  > 
-  > 分网站和RSS子项二级目录，可以通过查看抓取内容对抓取脚本进行问题分析。
-
-+ 对话内容
-  > 目录：[conversion](conversion)
-  > 
-  > 和AI的沟通记录，可以通过查看记录对AI分析的效果进行评估。
-
-+ 生成网页
-  > 目录：[generated](templates/generated)
-  > 
-  > [PostManager.py](ServiceComponent/PostManager.py) 生成的网页
+  > + intelligence_low_value：被抛弃的低价值信息，用以作为模型训练的负例。
+  > + intelligence_storylines：情报态势推演记录。
 
 
 ## 意见和建议
