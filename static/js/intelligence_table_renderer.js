@@ -634,6 +634,7 @@ ArticleRenderer.mediaSources = [
 
     // 土耳其 (Turkey)
     { domain: "aa.com.tr", nameCN: "阿纳多卢通讯社", country: "Turkey", flag: "🇹🇷", accessibleInChina: true },
+    { domain: "ntv.com.tr", nameCN: "土耳其主流媒体 NTV", country: "Turkey", flag: "🇹🇷", accessibleInChina: true },
 
     // 埃及 (Egypt)
     { domain: "ahram.org.eg", nameCN: "金字塔报", country: "Egypt", flag: "🇪🇬", accessibleInChina: true },
@@ -665,6 +666,7 @@ ArticleRenderer.mediaSources = [
     { domain: "timesofindia.indiatimes.com", nameCN: "印度时报", country: "India", flag: "🇮🇳", accessibleInChina: true },
 
     // 中国大陆 (China)
+    { domain: "news.cn", nameCN: "新华网", country: "China", flag: "🇨🇳", accessibleInChina: true },
     { domain: "xinhuanet.com", nameCN: "新华社", country: "China", flag: "🇨🇳", accessibleInChina: true },
     { domain: "people.com.cn", nameCN: "人民日报", country: "China", flag: "🇨🇳", accessibleInChina: true },
     { domain: "jiemian.com", nameCN: "界面新闻", country: "China", flag: "🇨🇳", accessibleInChina: true },

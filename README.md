@@ -4,6 +4,7 @@
 
 项目地址：[https://github.com/SleepySoft/IntelligenceIntegrationSystem](https://github.com/SleepySoft/IntelligenceIntegrationSystem/tree/dev)
 
+
 ## v2版本的说明
 
 从2026年2月15日开始，main分支将正式切换到v2版本。
@@ -18,12 +19,15 @@ v2版本兼容v1版本的数据，数据库不需要额外的升级操作。
 除了情报数据结构及评分机制改变外，v2版本还对爬虫框架进行了进一步的改进。
 一方面通过界面“所见即所得”的方式生成爬虫配置，另一方面增加了监控及调度功能，今后接入网站会非常方便。
 
-另外向量数据库也进行了调整，但由于时间问题并没有正式应用到本次的更新中。
-导出数据也包括了所有情报对应的向量数据，使用该向量数据启动向量数据库后，是可以使用相关功能的，只不过新情报不会更新到向量数据库而已。
+另外向量数据库存储的格式也进行了调整，即将部分内容直接置入metadata中。借助向量数据库，IIS系统支持相似情报跳转及关联情报推演功能。
 
-经过调整后的向量数据库对关联情报的查询表现优异，接下来我会重点研究情报的聚合。
+经过调整后的向量数据库对关联情报的查询表现优异，接下来我会重点研究情报的聚合以及关联推演。
+
 
 ## 更新与通知
+
+N/A
+
 
 ## 起因
 
@@ -37,15 +41,240 @@ v2版本兼容v1版本的数据，数据库不需要额外的升级操作。
 
 既然媒体们自己不体面，那么我来让新闻体面。
 
-## 原理与实现
+
+## 已接入的媒体
+
+```js
+{ domain: "aa.com.tr", nameCN: "阿纳多卢通讯社", country: "Turkey", flag: "🇹🇷", accessibleInChina: true },
+{ domain: "abc.net.au", nameCN: "澳大利亚广播公司", country: "Australia", flag: "🇦🇺", accessibleInChina: false },
+{ domain: "aljazeera.com", nameCN: "半岛电视台", country: "Qatar", flag: "🇶🇦", accessibleInChina: true },
+{ domain: "bbc.com", nameCN: "英国广播公司", country: "UK", flag: "🇬🇧", accessibleInChina: false },
+{ domain: "cbc.ca", nameCN: "加拿大广播公司", country: "Canada", flag: "🇨🇦", accessibleInChina: false },
+{ domain: "chinanews.com", nameCN: "中国新闻网", country: "China", flag: "🇨🇳", accessibleInChina: true },
+{ domain: "dw.com", nameCN: "德国之声", country: "Germany", flag: "🇩🇪", accessibleInChina: false },
+{ domain: "elpais.com", nameCN: "国家报", country: "Spain", flag: "🇪🇸", accessibleInChina: false },
+{ domain: "investing.com", nameCN: "英为财情", country: "International", flag: "🌍", accessibleInChina: true },
+{ domain: "news.cn", nameCN: "新华网", country: "China", flag: "🇨🇳", accessibleInChina: true },
+{ domain: "nhk.or.jp", nameCN: "日本广播协会", country: "Japan", flag: "🇯🇵", accessibleInChina: true },
+{ domain: "ntv.com.tr", nameCN: "土耳其主流媒体 NTV", country: "Turkey", flag: "🇹🇷", accessibleInChina: true },
+{ domain: "rfi.fr", nameCN: "法国国际广播电台", country: "France", flag: "🇫🇷", accessibleInChina: false },
+{ domain: "tass.com", nameCN: "塔斯社", country: "Russia", flag: "🇷🇺", accessibleInChina: true },
+{ domain: "voanews.com", nameCN: "美国之音", country: "USA", flag: "🇺🇸", accessibleInChina: false },
+```
+
+## 环境配置及部署运行
+
+#### 依赖软件
+
++ MongoDB
+
+程序使用MongoDB数据库存储情报文档，这是一个NoSql数据库，请在官网下载：
+> 
+> https://www.mongodb.com/products/self-managed/community-edition
+> 
+
+同时建议安装mongodb tools，用以导出及导出数据库（从某个版本开始命令行工具不再和MongoDB主程序打包）：
+> 
+> https://www.mongodb.com/try/download/database-tools
+> 
+
+#### 向量模型（向量数据库用）
+
+[bge-m3](https://huggingface.co/BAAI/bge-m3)
+
+
+#### 创建与激活虚拟环境（可选）
+
+本项目建议使用python版本为3.10以上。当然，不创建虚拟环境，直接使用系统默认的python环境也不是不行。
+
+> 所谓python虚拟环境，其实非常简单，它就是一个目录，当你切换到这个虚拟环境时，使用的解析器、安装的库、使用的库，都仅限于该目录下，从而和其它环境隔离。
+> 
+> 知道这个原理后，大家应该能想到：使用pycharm时，选择已创建的虚拟环境其实就是选择这个目录下的python.exe。
+
+创建虚拟环境主要有三种方法：
++ 原生的venv
++ Anaconda（及其兼容方法）
++ uv
+
+##### venv
+
+```
+# 创建虚拟环境
+# - 通常在项目目录下执行以下命令，虚拟环境的python版本跟你当前运行的python环境有关
+# - 对我来说，通常是在anaconda下创建一个指定版本python的虚拟环境，再使用这个虚拟环境创建venv
+# - （那为什么不直接用anaconda？好问题。）
+
+python -m venv .venv
+
+# 切换到该虚拟环境（接下来安装依赖前都需要先切换到该虚拟环境，下同）
+
+# ---- Windows ----
+.venv\Scripts\activate.bat
+
+# ----- Linux -----
+source .venv/Scripts/activate
+```
+
+##### Anaconda
+
+Anaconda好处是方便，缺点是重
+
+下载：https://www.anaconda.com/download
+
+```
+# 创建虚拟环境
+conda create -n iis python=3.10
+
+# 切换到该虚拟环境
+conda activate iis
+```
+
+##### uv
+
+这是现在流行的工具，非常轻量，而且快，不过我还不是很熟悉。以下内容来自AI。
+
+```
+# 安装uv
+pip install uv
+
+# 创建虚拟环境
+uv venv
+
+# 切换到该虚拟环境
+.venv\Scripts\activate.bat
+
+# 接下来可以使用pip install -r，也可以使用uv的方式安装依赖（自行查阅）。
+```
+
+#### 程序部署与安装依赖
+
+```
+# Clone this project to your local
+git clone https://github.com/SleepySoft/IntelligenceIntegrationSystem.git
+
+# Enter this project dir
+cd IntelligenceIntegrationSystem
+
+# Important: Fetch sub modules
+git submodule update --init --recursive
+
+# --------------------------------------------------------------------------------- #
+# ! Reference to above: Create virtual environment and switch to this environment ! #
+#           Use `conda activate iis` or `.venv\Scripts\activate.bat`                #
+# --------------------------------------------------------------------------------- #
+
+# Old pip version will not support utf-8, so upgrade to newest pip first.
+python.exe -m pip install --upgrade pip
+
+# Install dependency
+pip install -r requirements.txt
+pip install -r IntelligenceCrawler/requirements.txt
+pip install -r PyLoggingBackend/requirements.txt
+pip install -r AIClientCenter/requirements.txt
+pip install -r VectorDB/requirements.txt
+
+# Optional: If has dependency issue when using upper command, use this command instead: 
+pip install -r requirements_freeze.txt
+
+# After pip install. Install playwright's headless browser
+playwright install chromium
+
+# ------------------------------------------------------------------------------------
+# ! Before launching program, you should do some config first (read following section)
+# ------------------------------------------------------------------------------------
+
+# Run the Vector DB (Optional)
+python VectorDB/VectorDBBService.py \
+    --db-path D:\Code\IntelligenceIntegrationSystem\_data\VectorDB 
+    --model D:\Code\bge-m3
+
+# Run main service
+python IntelligenceHubLauncher.py
+
+# Run collectors
+python CrawlerServiceEngine.py
+```
+
+#### 程序配置
+
++ 重要：将 [config_example.json](_config/config_example.json) 复制为 [config.json](_config/config.json) ，按照实际情况更改配置（默认能启动，但不能进行分析）。
+> 
+> 配置主要应用在在 [IntelligenceHubStartup.py](IntelligenceHubStartup.py) 中载入，阅读该文件可以知道各配置项的用法。
+> 
+> 对于抓取外网新闻，需要配置 global_site_proxy。
+> 
+> 注意intelligence_hub_web_service及collector段的token并非AI服务的Token，而是爬虫引擎提交情报时的凭证以及IHub接受提交情报的凭证，两边需要对上（因为二者可以部署在不同的机器上）。
+> 
+
++ 重要：运行 [UserManagerConsole.py](Scripts/UserManagerConsole.py) ，按提示增加一个用户并设置密码，否则后台无法登录。
+
++ AI服务配置
+> 
+> 如果想使用AI进行情报分析，需要配置 [ai_client_config.py](_config/ai_client_config.py) 。由于AI服务配置比较复杂，因此直接使用python文件而非json文件。
+> 
+> 配置请参考：[AIClientConfigExample.py](AIClientCenter/AIClientConfigExample.py) ，按需要复制修改对应项即可。
+> 
+
+#### 启动
+
+完整的功能需要启动3个Python程序：
+
++ [IntelligenceHubLauncher.py](IntelligenceHubLauncher.py)
+> 
+> 核心服务，启动该服务后即可通过网页访问其主要功能。
+> 
+
++ [CrawlerServiceEngine.py](CrawlerServiceEngine.py)
+> 
+> 爬虫服务，启动该服务才能抓取情报/新闻。
+> 
+
++ [可选] [VectorDB/VectorDBBService.py)](VectorDB/VectorDBBService.py)
+> 
+> 向量数据库服务，开启该服务后可以使用高级的搜索及关联功能。
+> 
+> 参考启动命令：
+>   ```commandline
+>   python VectorDB/VectorDBBService.py \
+>     --db-path C:\Code\git\IntelligenceIntegrationSystem\_data\VectorDB \
+>     --model C:\Code\git\bge-m3 \
+>     --agg-store-dir C:\Code\git\IntelligenceIntegrationSystem\_data\Aggressive
+>   ```
+> 
+> 如果没有下载离线向量数据库，可以通过 [rebuild_vector_index.py](Scripts/rebuild_vector_index.py) 脚本增量新建向量索引。参考启动命令：
+>   ```commandline
+>       python Scripts/rebuild_vector_index.py rebuild
+>   ```
+> 
+
+#### 使用
+
++ 打开 [localhost:5000/login](localhost:5000/login) 输入刚才配置的账号密码进入后台页面。
+
++ 打开 [localhost:8001](localhost:8001) 进入向量数据库的管理页面。
+
++ 打开 [localhost:5000](localhost:5000) 则是无密码的公开页面。
+
+
+## 其它工具
+
++ MongoDB工具
+  > https://www.mongodb.com/try/download/database-tools
+  > 
+  > 用以导出/导出MongoDB记录，可以配合[mongodb_exporter.py](Scripts/mongodb_exporter.py)一系列脚本使用。
+
+
+## 程序架构
+
+### 原理
 
 本程序核流程为：抓取 -> 提交到情报中心 -> 清洗、AI分析 -> 筛选并重发布 -> 归档
 
-程序的结构如下：
+### 模块
 
-### 抓取
+#### 抓取
 
-> 本程序只通过RSS抓取公开新闻，原因在于这类新闻抓取难度小（本身就是给RSS阅读器的公开信息），且法律风险低。
+> 本程序通过RSS抓取公开新闻，原因在于这类新闻抓取难度小（本身就是给RSS阅读器的公开信息），且法律风险低。对于没有RSS的网站，也支持列表页抓取。
 
 程序中由[CrawlerServiceEngine.py](CrawlerServiceEngine.py)**启动**并驱动[CrawlTasks](CrawlTasks)目录下的抓取模块，
 > 
@@ -186,177 +415,6 @@ v2版本兼容v1版本的数据，数据库不需要额外的升级操作。
   > 目录：[generated](templates/generated)
   > 
   > [PostManager.py](ServiceComponent/PostManager.py) 生成的网页
-
-## 环境配置及部署运行
-
-#### 依赖软件
-
-+ MongoDB
-
-程序使用MongoDB数据库存储情报文档，这是一个NoSql数据库，请在官网下载：
-> 
-> https://www.mongodb.com/products/self-managed/community-edition
-> 
-
-同时建议安装mongodb tools，用以导出及导出数据库（从某个版本开始命令行工具不再和MongoDB主程序打包）：
-> 
-> https://www.mongodb.com/try/download/database-tools
-> 
-
-
-#### 创建与激活虚拟环境（可选）
-
-本项目建议使用python版本为3.10以上。当然，不创建虚拟环境，直接使用系统默认的python环境也不是不行。
-
-所谓python虚拟环境，其实非常简单，它就是一个目录，当你切换到这个虚拟环境时，使用的解析器、安装的库、使用的库，都仅限于该目录下，从而和其它环境隔离。
-
-知道这个原理后，大家应该能想到：使用pycharm时，选择已创建的虚拟环境其实就是选择这个目录下的python.exe。
-
-创建虚拟环境主要有三种方法：
-+ 原生的venv
-+ Anaconda（及其兼容方法）
-+ uv
-
-##### venv
-
-```
-# 创建虚拟环境
-# - 通常在项目目录下执行以下命令，虚拟环境的python版本跟你当前运行的python环境有关
-# - 对我来说，通常是在anaconda下创建一个指定版本python的虚拟环境，再使用这个虚拟环境创建venv
-# - （那为什么不直接用anaconda？好问题。）
-
-python -m venv .venv
-
-# 切换到该虚拟环境（接下来安装依赖前都需要先切换到该虚拟环境，下同）
-
-# ---- Windows ----
-.venv\Scripts\activate.bat
-
-# ----- Linux -----
-source .venv/Scripts/activate
-```
-
-##### Anaconda
-
-Anaconda好处是方便，缺点是重
-
-下载：https://www.anaconda.com/download
-
-```
-# 创建虚拟环境
-conda create -n iis python=3.10
-
-# 切换到该虚拟环境
-conda activate iis
-```
-
-##### uv
-
-这是现在流行的工具，非常轻量，而且快，不过我还不是很熟悉。以下内容来自AI。
-
-```
-# 安装uv
-pip install uv
-
-# 创建虚拟环境
-uv venv
-
-# 切换到该虚拟环境
-.venv\Scripts\activate.bat
-
-# 接下来可以使用pip install -r，也可以使用uv的方式安装依赖（自行查阅）。
-```
-
-#### 程序部署
-
-```
-# Clone this project to your local
-git clone https://github.com/SleepySoft/IntelligenceIntegrationSystem.git
-
-# Enter this project dir
-cd IntelligenceIntegrationSystem
-
-# Important: Fetch sub modules
-git submodule update --init --recursive
-
-# -------------------------------------------------------------------------------
-# ! Reference to above: Create virtual environment and switch to this environment
-# -------------------------------------------------------------------------------
-
-# Old pip version will not support utf-8, so upgrade to newest pip first.
-python.exe -m pip install --upgrade pip
-
-# Install dependency
-pip install -r requirements.txt
-
-# If has dependency issue when using upper command
-pip install -r requirements_freeze.txt
-
-# ------------------------------------------------------------------------------------
-# ! Before launching program, you should do some config first (read following section)
-# ------------------------------------------------------------------------------------
-
-# After pip install. Install playwright's headless browser
-playwright install chromium
-
-# Run the Vector DB (Optional)
-python VectorDB/VectorDBBService.py \
-    --db-path D:\Code\IntelligenceIntegrationSystem\_data\VectorDB 
-    --model D:\Code\bge-m3
-
-# Run main service
-python IntelligenceHubLauncher.py
-
-# Run collectors
-python CrawlerServiceEngine.py
-```
-
-#### 程序以外的配置
-
-+ 重要：运将 config_example.json 复制为 config.json，按照实际情况更改配置（默认能启动，但不能进行分析）。
-> 
-> 配置主要在 [IntelligenceHubStartup.py](IntelligenceHubStartup.py) 中载入，阅读该文件可以知道各配置项的用法。
-> 
-> 如果想使用AI进行情报分析，需要配置 ai_service 项，包括token。
-> 
-> 如果想使用咸鱼上购买的批量14元key，需要配置 ai_service_rotator 项，指定key文件。
-> 
-> 对于抓取外网新闻，需要配置 global_site_proxy。
-> 
-
-+ 重要：运行 [UserManagerConsole.py](Scripts/UserManagerConsole.py) ，按提示增加一个用户，设置密码。
-
-#### 使用
-
-+ 程序运行后，打开 [localhost:5000/login](localhost:5000/login) 输入刚才配置的账号密码进入后台页面。
-
-+ 打开[localhost:5000](localhost:5000)则是无密码的公开页面。
-
-
-## 其它工具
-
-+ MongoDB工具
-  > https://www.mongodb.com/try/download/database-tools
-  > 
-  > 用以导出/导出MongoDB记录，可以配合[mongodb_exporter.py](Scripts/mongodb_exporter.py)一系列脚本使用。
-
-
-## 已接入的网站
-
-```js
-{ domain: "voanews.com", nameCN: "美国之音", country: "USA", flag: "🇺🇸", accessibleInChina: false },
-{ domain: "bbc.com", nameCN: "英国广播公司", country: "UK", flag: "🇬🇧", accessibleInChina: false },
-{ domain: "cbc.ca", nameCN: "加拿大广播公司", country: "Canada", flag: "🇨🇦", accessibleInChina: false },
-{ domain: "rfi.fr", nameCN: "法国国际广播电台", country: "France", flag: "🇫🇷", accessibleInChina: false },
-{ domain: "dw.com", nameCN: "德国之声", country: "Germany", flag: "🇩🇪", accessibleInChina: false },
-{ domain: "abc.net.au", nameCN: "澳大利亚广播公司", country: "Australia", flag: "🇦🇺", accessibleInChina: false },
-{ domain: "elpais.com", nameCN: "国家报", country: "Spain", flag: "🇪🇸", accessibleInChina: false },
-{ domain: "investing.com", nameCN: "英为财情", country: "International", flag: "🌍", accessibleInChina: true },
-{ domain: "aljazeera.com", nameCN: "半岛电视台", country: "Qatar", flag: "🇶🇦", accessibleInChina: true },
-{ domain: "aa.com.tr", nameCN: "阿纳多卢通讯社", country: "Turkey", flag: "🇹🇷", accessibleInChina: true },
-{ domain: "nhk.or.jp", nameCN: "日本广播协会", country: "Japan", flag: "🇯🇵", accessibleInChina: true },
-{ domain: "xinhuanet.com", nameCN: "新华社", country: "China", flag: "🇨🇳", accessibleInChina: true },
-```
 
 
 ## 意见和建议
