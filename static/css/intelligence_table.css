@@ -1020,28 +1020,148 @@ body {
 /* =========================================
    Pagination 优化：更优雅的页码显示
    ========================================= */
+/* =========================================
+   3. 分页 (Pagination) - Enhanced
+   ========================================= */
 .pagination {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 14px;
-    margin: 10px 0 40px;
-    flex-wrap: wrap; /* 小屏允许换行，但保持优雅 */
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 12px 0 28px;
 }
 
+/* 分页按钮 */
 .page-btn {
-    min-width: 86px;
-    padding: 8px 18px;
-    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 84px;
+    height: 40px;
+    padding: 0 16px;
+    border: 1px solid #cfe2ff;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #f8fbff 0%, #eaf4ff 100%);
+    color: #1f5fbf;
+    text-decoration: none;
+    font-size: 0.96rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.22s ease;
+    box-shadow: 0 1px 2px rgba(13, 110, 253, 0.06);
 }
 
+.page-btn:hover {
+    background: linear-gradient(180deg, #eef6ff 0%, #dcecff 100%);
+    border-color: #b6d4fe;
+    color: #0d47a1;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(13, 110, 253, 0.10);
+}
+
+.page-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 4px rgba(13, 110, 253, 0.08);
+}
+
+.page-btn.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+    background: #f3f6f9;
+    border-color: #dbe3ea;
+    color: #8a97a6;
+}
+
+/* 页码信息块 */
 .page-info {
-    min-width: 120px;
-    text-align: center;
-    color: #546e7a;
-    font-size: 0.95rem;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 132px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: #f8fafc;
+    color: #5b6b7c;
+    font-size: 0.94rem;
     line-height: 1.35;
+    text-align: center;
     white-space: normal;
+    box-shadow: inset 0 0 0 1px #e8eef5;
+}
+
+/* 如果页码里有数字，视觉上更稳一些 */
+.page-info strong,
+.page-info b {
+    color: #243447;
+    font-weight: 700;
+}
+
+/* 顶部和底部分页容器间距更自然 */
+.pagination-container {
+    margin-top: 8px;
+    margin-bottom: 18px;
+}
+
+/* =========================================
+   移动端分页优化
+   核心思路：
+   - 页码信息独占一行，放到上面
+   - 按钮留在下面一行
+   - 按钮等宽，手指更好点
+   ========================================= */
+@media (max-width: 768px) {
+    .pagination {
+        justify-content: center;
+        gap: 10px;
+        margin: 8px 0 16px;
+    }
+
+    .page-info {
+        order: -1;               /* 把页码信息提到最上面 */
+        width: 100%;
+        max-width: 220px;
+        min-width: 0;
+        margin: 0 auto 2px;
+        padding: 7px 10px;
+        font-size: 0.92rem;
+        line-height: 1.3;
+        border-radius: 12px;
+    }
+
+    .page-btn {
+        flex: 1 1 0;
+        min-width: 72px;
+        max-width: 110px;
+        height: 42px;
+        padding: 0 12px;
+        border-radius: 12px;
+        font-size: 0.95rem;
+    }
+}
+
+/* 超窄屏进一步优化 */
+@media (max-width: 420px) {
+    .pagination {
+        gap: 8px;
+    }
+
+    .page-btn {
+        min-width: 64px;
+        height: 40px;
+        padding: 0 10px;
+        font-size: 0.92rem;
+    }
+
+    .page-info {
+        max-width: 200px;
+        font-size: 0.88rem;
+    }
 }
 
 /* 移动端分页进一步优化 */
