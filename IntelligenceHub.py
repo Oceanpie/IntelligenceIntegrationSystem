@@ -18,11 +18,10 @@ from prompts_v2x import ANALYSIS_PROMPT_TABLE
 from Tools.MongoDBAccess import MongoDBStorage
 from VectorDB.VectorDBClient import VectorDBClient
 from ServiceComponent.IntelligenceHubDefines_v2 import *
-from MyPythonUtility.DictTools import check_sanitize_dict
+from MyPythonUtility.DictTools import check_sanitize_dict, DictPrinter
 from AIClientCenter.AIClientManager import AIClientManager
 from MyPythonUtility.AdvancedScheduler import AdvancedScheduler
 from ServiceComponent.IntelligenceAnalyzerProxy import analyze_with_ai
-from ServiceComponent.RecommendationManager import RecommendationManager
 from ServiceComponent.IntelligenceQueryEngine import IntelligenceQueryEngine
 from ServiceComponent.IntelligenceScoringEngine import IntelligenceScoringEngine
 from ServiceComponent.IntelligenceVectorDBEngine import IntelligenceVectorDBEngine
@@ -115,14 +114,6 @@ class IntelligenceHub:
         self.aggregation_engine_summary: Optional[IntelligenceAggregationEngine] = None
 
         self.scheduler = AdvancedScheduler(logger=logging.getLogger('Scheduler'))
-        # TODO: This cache seems to be ugly.
-        # self.intelligence_cache = IntelligenceCache(self.mongo_db_archive, 6, 2000, None)       # datetime.timedelta(days=1)
-
-        self.recommendations_manager = RecommendationManager(
-            query_engine = self.archive_db_query_engine,
-            ai_client_manager=self.ai_client_manager,
-            db_storage=self.mongo_db_recommendation
-        )
 
         # Init when vector is ready.
         self.dynamic_graph_engine: Optional[DynamicGraphEngine] = None
@@ -607,30 +598,6 @@ class IntelligenceHub:
                 if self._check_duplication_in_processed_data(original_data):
                     raise IntelligenceHub.Exception('drop', 'Article duplicated')
 
-                # --------------------------------- AI Aggressive with Retry ---------------------------------
-
-                # content = original_data.get('content', '')
-                # if (not self.vector_db_init_failed) and (self.vector_db_full_text is not None):
-                #     related_items = self.vector_db_full_text.search(content)
-                #     item_uuids = [item["doc_id"] for item in related_items]
-                #     intelligences = self.get_intelligence(item_uuids)
-                #     recent
-
-
-                # TODO: 暂时不做，因为需要考虑的事情太多，且消耗token，后续可以考虑采用小模型实现。
-                # TODO: 20251028 - 绝妙的主意：使用向量搜索来查找近似内容，减少聚合分析的工作量。
-                #
-                # history_data_brief = self._get_cached_data_brief()
-                # aggressive_result = aggressive_by_ai(self.open_ai_client, AGGRESSIVE_PROMPT, result, history_data_brief)
-                #
-                # if aggressive_result:
-                #     # dict is ordered in python 3.7+
-                #     related_intelligence_uuid = next(iter(aggressive_result))
-                #     if aggressive_result[related_intelligence_uuid] > 1:
-                #         self._add_item_link(related_intelligence_uuid, validated_data['UUID'])
-                #         validated_data['APPENDIX'][APPENDIX_PARENT_ITEM] = related_intelligence_uuid
-
-
                 # ---------------------------------- AI Analysis with Retry ----------------------------------
 
                 result = self.__robust_analyze_with_ai(original_data, worker_index)
@@ -658,6 +625,11 @@ class IntelligenceHub:
 
                 # ------------------- Check low value data -------------------
 
+                # 20260111: In v2x prompt, AI will not extract UUID and informant from original message.
+                # 20260324: Always set correct UUID and INFORMANT. Because the low value also need to be persisted.
+                result['UUID'] = original_uuid
+                result['INFORMANT'] = str(original_data.get('informant', '')).strip()
+
                 if self._is_low_value_data(result):
                     # 20260112: Put it in processed queue, and save into intelligence_low_value
                     #           For model training: negative sample.
@@ -667,11 +639,6 @@ class IntelligenceHub:
                 # # If this article has no value. No EVENT_TEXT field.
                 # if 'EVENT_TEXT' not in result:
                 #     raise IntelligenceHub.Exception('drop', 'Article has no value')
-
-                # 20260111: In v2x prompt, AI will not extract UUID and informant from original message.
-
-                result['UUID'] = original_uuid
-                result['INFORMANT'] = str(original_data.get('informant', '')).strip()
 
                 scoring_engine = IntelligenceScoringEngine()
                 total_score = scoring_engine.calculate_single(result)
@@ -746,9 +713,6 @@ class IntelligenceHub:
                 logger.info(f"Message {data['UUID']} archived.")
 
                 # TODO: Call post processor plugins
-
-                # self._index_archived_data(data)
-                # self._publish_article_to_rss(data)
 
                 try:
                     if self.async_translation_patch and needs_translation(data):
@@ -1096,24 +1060,6 @@ class IntelligenceHub:
         logger.info("[AggregationBootstrap] Executing initial offline aggregation...")
         self._do_run_summary_aggregation()
 
-    # def _do_generate_recommendation(self):
-    #     now = datetime.datetime.now()
-    #     logger.info(f'Generate recommendation start at: {now}')
-    #
-    #     # TODO: Test, so using a wide datetime range.
-    #     # period = (now - datetime.timedelta(days=60), now)
-    #     # period = (now - datetime.timedelta(days=14), now)
-    #     period = (now- datetime.timedelta(hours=24), now)
-    #
-    #     # TODO: Temp remove because it may causes ai client error.
-    #     # self.recommendations_manager.generate_recommendation(period=period, threshold=6, limit=500)
-    #     logger.info(f'Generate recommendation finished at: {datetime.datetime.now()}')
-
-    # def _trigger_generate_recommendation(self):
-    #     now = datetime.datetime.now()
-    #     logger.info(f'Trigger recommendation generation at: {now}')
-    #     self.scheduler.execute_task('generate_recommendation_task', 2)
-
     # ------------------------------------------------ Helpers ------------------------------------------------
 
     def _is_low_value_data(self, data: dict):
@@ -1257,19 +1203,6 @@ class IntelligenceHub:
                     {f'APPENDIX.{APPENDIX_ARCHIVED_FLAG}': archived})
         except Exception as e:
             logger.error(f'Mark archived data flag fail: {str(e)}')
-
-    # def _add_item_link(self, parent_item_uuid: str, child_item_uuid):
-    #     try:
-    #         if self.mongo_db_archive:
-    #             self.mongo_db_archive.update({
-    #                 'UUID': parent_item_uuid},
-    #                 {"$push": {"APPENDIX.__PARENT_ITEM__": child_item_uuid}}
-    #             )
-    #     except Exception as e:
-    #         logger.error(f'Add item link fail: {str(e)}')
-    #
-    # def _aggressive_intelligence(self, article: dict):
-    #     pass
 
     def _do_translation_backfill(self):
         try:
