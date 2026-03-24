@@ -30,8 +30,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const reprCardHtml = renderer.generateArticleCardHtml(doc);
 
                 // 只有 size > 1 时才显示展开按钮
+
                 const toggleBtn = cluster.size > 1
-                    ? `<button class="cluster-toggle-btn" data-cluster-id="${cluster.cluster_id}">
+                    ? `<button class="cluster-toggle-btn"
+                               data-cluster-id="${cluster.cluster_id}"
+                               data-related-count="${cluster.size - 1}">
                          <i class="bi bi-chevron-down"></i> Expand (${cluster.size - 1} related)
                        </button>`
                     : '';
@@ -62,43 +65,57 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 处理展开/收起事件 (事件委托)
     listContainer.addEventListener('click', async (e) => {
-        const btn = e.target.closest('.cluster-toggle-btn');
+        const btn = e.target.closest('.cluster-toggle-btn, .cluster-inline-collapse-btn');
         if (!btn) return;
 
         const clusterId = btn.getAttribute('data-cluster-id');
         const membersDiv = document.getElementById(`members-${clusterId}`);
-        const icon = btn.querySelector('i');
+        const containerEl = btn.closest('.cluster-container');
+        const topBtn = containerEl ? containerEl.querySelector('.cluster-toggle-btn[data-cluster-id]') : null;
+        const relatedCount = topBtn ? topBtn.getAttribute('data-related-count') : '';
 
-        // Toggle 逻辑
-        if (membersDiv.classList.contains('expanded')) {
+        if (!membersDiv || !containerEl) return;
+
+        const isInlineCollapse = btn.classList.contains('cluster-inline-collapse-btn');
+
+        // =========================
+        // 收起：顶部按钮再次点击，或者点击任意子项后的 Collapse
+        // =========================
+        if (membersDiv.classList.contains('expanded') && (isInlineCollapse || btn === topBtn)) {
             membersDiv.classList.remove('expanded');
-            icon.classList.replace('bi-chevron-up', 'bi-chevron-down');
-            btn.innerHTML = `<i class="bi bi-chevron-down"></i> Expand`;
+
+            if (topBtn) {
+                topBtn.innerHTML = `<i class="bi bi-chevron-down"></i> Expand (${relatedCount} related)`;
+            }
             return;
         }
 
+        // 如果点的是子项里的 Collapse，但当前没展开，就不用处理
+        if (isInlineCollapse) return;
+
+        // =========================
+        // 展开
+        // =========================
         membersDiv.classList.add('expanded');
-        icon.classList.replace('bi-chevron-down', 'bi-chevron-up');
-        btn.innerHTML = `<i class="bi bi-chevron-up"></i> Collapse`;
+
+        if (topBtn) {
+            topBtn.innerHTML = `<i class="bi bi-chevron-up"></i> Collapse`;
+        }
 
         // 如果已经加载过，直接返回
         if (membersDiv.innerHTML.trim() !== '') return;
 
         membersDiv.innerHTML = `<div class="loading-spinner"><i class="bi bi-arrow-repeat article-spinner"></i> Loading members...</div>`;
 
-        // 动态加载子成员
         try {
-            // 请求上限 500 (如果超出可通过 API 增加 offset 机制，这里简写全拉)
             const resp = await fetch(`/api/clusters/${clusterId}/members?limit=500`);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
             const data = await resp.json();
             const items = data.items || [];
 
-            // 去除代表文章本身（通常是列表第一条，或者依靠 uuid 过滤）
-            // 因为代表文章已经在 cluster-header 里显示过了
-            const containerEl = btn.closest('.cluster-container');
-            const reprUuid = containerEl.querySelector('.article-title').getAttribute('data-uuid');
+            const reprTitleEl = containerEl.querySelector('.article-title');
+            const reprUuid = reprTitleEl ? reprTitleEl.getAttribute('data-uuid') : null;
 
             const filteredItems = items.filter(item => item.uuid !== reprUuid);
 
@@ -107,8 +124,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // 渲染子文章
-            const membersHtml = filteredItems.map(item => renderer.generateArticleCardHtml(item.doc)).join('');
+            const membersHtml = filteredItems.map(item => `
+                <div class="cluster-member-item">
+                    ${renderer.generateArticleCardHtml(item.doc)}
+                    <div class="cluster-member-actions">
+                        <button class="cluster-inline-collapse-btn" data-cluster-id="${clusterId}">
+                            <i class="bi bi-chevron-up"></i> Collapse
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+
             membersDiv.innerHTML = membersHtml;
 
             renderer.enhanceSourceLinks();
