@@ -11,6 +11,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // 参数2: 分页容器的Class名 (注意HTML里要是 class="pagination-container")
     const renderer = new ArticleRenderer('article-list-content', 'pagination-container');
 
+    if (window.ArticleModalManager) {
+        ArticleModalManager.init({
+            history: false
+        });
+    }
+
     const searchForm = document.getElementById('search-form');
     const searchButton = document.getElementById('search-button');
     const spinner = searchButton.querySelector('.spinner-border');
