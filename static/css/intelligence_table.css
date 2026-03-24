@@ -1016,3 +1016,50 @@ body {
         box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
     }
 }
+
+/* =========================================
+   Pagination 优化：更优雅的页码显示
+   ========================================= */
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 14px;
+    margin: 10px 0 40px;
+    flex-wrap: wrap; /* 小屏允许换行，但保持优雅 */
+}
+
+.page-btn {
+    min-width: 86px;
+    padding: 8px 18px;
+    text-align: center;
+}
+
+.page-info {
+    min-width: 120px;
+    text-align: center;
+    color: #546e7a;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    white-space: normal;
+}
+
+/* 移动端分页进一步优化 */
+@media (max-width: 768px) {
+    .pagination {
+        gap: 10px;
+        margin: 8px 0 16px;
+    }
+
+    .page-btn {
+        min-width: 76px;
+        padding: 8px 12px;
+        font-size: 0.95rem;
+    }
+
+    .page-info {
+        min-width: 96px;
+        font-size: 0.92rem;
+        line-height: 1.3;
+    }
+}
