@@ -6,6 +6,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const limitSelect = document.getElementById('limit-select');
     const refreshBtn = document.getElementById('refresh-btn');
 
+    if (window.ArticleModalManager) {
+        ArticleModalManager.init({
+            history: false
+        });
+    }
+
     async function loadClusters() {
         const limit = limitSelect ? limitSelect.value : 50;
         renderer.showLoading();
@@ -150,77 +156,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 初始加载
     loadClusters();
-
-    // ==========================================
-    // 复用原有的 Modal 逻辑，拦截文章点击
-    // ==========================================
-    (function initArticleDetailModal() {
-        const overlay = document.getElementById('article-detail-overlay');
-        const bodyEl = document.getElementById('article-modal-body');
-        const titleEl = document.getElementById('article-modal-title');
-        const uuidEl = document.getElementById('article-modal-uuid');
-        const closeBtn = document.getElementById('article-close-btn');
-        const copyBtn = document.getElementById('article-copy-link-btn');
-        const openNewBtn = document.getElementById('article-open-newtab-btn');
-
-        if (!overlay) return;
-        let isOpen = false;
-
-        async function open(pageUrl, uuid, titleFallback) {
-            overlay.style.display = 'flex';
-            document.body.classList.add('body-scroll-locked');
-            titleEl.textContent = 'Loading...';
-            uuidEl.textContent = uuid ? `UUID: ${uuid}` : '';
-            bodyEl.innerHTML = `<div class="article-modal-loading"><i class="bi bi-arrow-repeat article-spinner"></i> Loading...</div>`;
-            openNewBtn.onclick = () => window.open(pageUrl, '_blank', 'noopener');
-            isOpen = true;
-
-            try {
-                const resp = await fetch(`/api/intelligence/${encodeURIComponent(uuid)}`);
-                if (resp.status === 401) {
-                    bodyEl.innerHTML = `<div style="color:#c00;">You are not authorized.</div>`;
-                    return;
-                }
-                const payload = await resp.json();
-                const article = payload?.data || payload;
-
-                titleEl.textContent = article?.EVENT_TITLE || titleFallback || 'Detail';
-                bodyEl.innerHTML = ArticleDetailRenderer.generateHTML(article);
-                ArticleDetailRenderer.bindEvents(bodyEl, uuid, 'article-toast-container');
-
-                copyBtn.onclick = async () => {
-                    try {
-                        await navigator.clipboard.writeText(location.origin + pageUrl);
-                        ArticleDetailRenderer.showToast('article-toast-container', 'Link copied!', 'success');
-                    } catch {
-                        ArticleDetailRenderer.showToast('article-toast-container', 'Copy failed', 'danger');
-                    }
-                };
-            } catch (err) {
-                titleEl.textContent = 'Load Failed';
-                bodyEl.innerHTML = `<div style="color:#c00;">Failed to load: ${String(err)}</div>`;
-            }
-        }
-
-        function close() {
-            if (!isOpen) return;
-            overlay.style.display = 'none';
-            document.body.classList.remove('body-scroll-locked');
-            bodyEl.innerHTML = '';
-            isOpen = false;
-        }
-
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-        closeBtn.addEventListener('click', () => close());
-        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
-
-        document.addEventListener('click', async (e) => {
-            const a = e.target.closest('a.article-title[data-uuid]');
-            if (!a) return;
-            if (e.button !== 0 || e.metaKey || e.ctrlKey) return;
-            e.preventDefault();
-            const uuid = a.dataset.uuid;
-            if (uuid) await open(`/intelligence/${uuid}`, uuid, a.textContent?.trim());
-        });
-    })();
 });

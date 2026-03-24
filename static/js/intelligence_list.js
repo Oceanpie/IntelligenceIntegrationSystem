@@ -16,6 +16,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const renderer = new ArticleRenderer('article-list-container', 'pagination-container');
 
+    if (window.ArticleModalManager) {
+        ArticleModalManager.init({
+            history: true
+        });
+    }
+
     function getUrlState() {
         const params = new URLSearchParams(window.location.search);
         return {
@@ -170,129 +176,4 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     loadData();
-
-    // Modal 管理器
-    (function initArticleDetailModal() {
-        const overlay = document.getElementById('article-detail-overlay');
-        const bodyEl = document.getElementById('article-modal-body');
-        const titleEl = document.getElementById('article-modal-title');
-        const uuidEl = document.getElementById('article-modal-uuid');
-        const closeBtn = document.getElementById('article-close-btn');
-        const copyBtn = document.getElementById('article-copy-link-btn');
-        const openNewBtn = document.getElementById('article-open-newtab-btn');
-
-        if (!overlay || !bodyEl || !titleEl || !uuidEl || !closeBtn || !copyBtn || !openNewBtn) return;
-
-        let lastFocus = null;
-        let isOpen = false;
-        let pushedState = false; // [修复] 记录是否改变了 URL
-
-        async function openByUuid(uuid) {
-            const pageUrl = `/intelligence/${encodeURIComponent(uuid)}`;
-            await open(pageUrl, uuid, 'Detail');
-        }
-
-        async function open(pageUrl, uuid, titleFallback) {
-            overlay.style.display = 'flex';
-            overlay.setAttribute('aria-hidden', 'false');
-            document.body.classList.add('body-scroll-locked');
-            titleEl.textContent = 'Loading...';
-            uuidEl.textContent = uuid ? `UUID: ${uuid}` : '';
-            bodyEl.innerHTML = `<div class="article-modal-loading"><i class="bi bi-arrow-repeat article-spinner"></i> Loading...</div>`;
-            openNewBtn.onclick = () => window.open(pageUrl, '_blank', 'noopener');
-
-            lastFocus = document.activeElement;
-            closeBtn.focus();
-
-            // [修复] History 逻辑：只在不同路径时 Push
-            if (location.pathname !== pageUrl) {
-                history.pushState({ modal: 'article', url: pageUrl }, '', pageUrl);
-                pushedState = true;
-            }
-            isOpen = true;
-
-            try {
-                const resp = await fetch(`/api/intelligence/${encodeURIComponent(uuid)}`);
-                if (resp.status === 401) {
-                    bodyEl.innerHTML = `<div style="color:#c00;">You are not authorized.</div>`;
-                    return;
-                }
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const payload = await resp.json();
-                const article = payload?.data || payload;
-
-                titleEl.textContent = article?.EVENT_TITLE || titleFallback || 'Detail';
-
-                // 调用统一渲染器
-                bodyEl.innerHTML = ArticleDetailRenderer.generateHTML(article);
-
-                // 绑定评分事件，传入 Modal 专用的 Toast 容器 ID
-                ArticleDetailRenderer.bindEvents(bodyEl, uuid, 'article-toast-container');
-
-                // Modal 内部链接跳转拦截
-                bodyEl.querySelectorAll('a[href^="/intelligence/"]').forEach(a => {
-                    a.addEventListener('click', (e) => {
-                        // 如果是类似 Find Similar 这种在新窗口打开的，不拦截
-                        if (a.target === '_blank' || e.button !== 0 || e.metaKey || e.ctrlKey) return;
-                        e.preventDefault();
-                        const nextUuid = (a.href.match(/\/intelligence\/([^/?#]+)/i) || [,''])[1];
-                        if (nextUuid) openByUuid(nextUuid);
-                    });
-                });
-
-                copyBtn.onclick = async () => {
-                    try {
-                        await navigator.clipboard.writeText(location.origin + pageUrl);
-                        ArticleDetailRenderer.showToast('article-toast-container', 'Link copied!', 'success');
-                    } catch {
-                        ArticleDetailRenderer.showToast('article-toast-container', 'Copy failed', 'danger');
-                    }
-                };
-            } catch (err) {
-                titleEl.textContent = 'Load Failed';
-                bodyEl.innerHTML = `<div style="color:#c00;">Failed to load: ${String(err)}</div>`;
-            }
-        }
-
-        // 修改 1：在 close 函数里打标记
-        function close({ fromHistory } = { fromHistory: false }) {
-            if (!isOpen) return;
-            overlay.style.display = 'none';
-            overlay.setAttribute('aria-hidden', 'true');
-            document.body.classList.remove('body-scroll-locked');
-            bodyEl.innerHTML = '';
-            isOpen = false;
-
-            if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
-
-            if (!fromHistory && pushedState) {
-                // [新增] 告诉外层列表：这次是我主动调用的后退，你不要刷新！
-                window._preventListReload = true;
-                history.back();
-            }
-            pushedState = false;
-        }
-
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-        closeBtn.addEventListener('click', () => close());
-        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
-
-        document.addEventListener('click', async (e) => {
-            const a = e.target.closest('a.article-title[data-uuid]');
-            if (!a) return;
-            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-            e.preventDefault();
-            const uuid = a.dataset.uuid;
-            if (uuid) await open(`/intelligence/${uuid}`, uuid, a.textContent?.trim() || 'Detail');
-        });
-
-        // 修改 2：在底部的 popstate 里打标记（应对用户点击浏览器左上角的“后退”按钮）
-        window.addEventListener('popstate', () => {
-            if (isOpen) {
-                // [新增] 告诉外层列表：用户按了浏览器后退键，我来负责关弹窗，你不要刷新！
-                window._preventListReload = true;
-                close({ fromHistory: true });
-            }
-        });
-    })();
 });
