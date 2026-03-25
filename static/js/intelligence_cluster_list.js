@@ -37,7 +37,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // 只有 size > 1 时才显示展开按钮
 
-                const toggleBtn = cluster.size > 1
+                const hasToggle = cluster.size > 1;
+
+                const toggleBtn = hasToggle
                     ? `<button class="cluster-toggle-btn"
                                data-cluster-id="${cluster.cluster_id}"
                                data-related-count="${cluster.size - 1}">
@@ -47,13 +49,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 html += `
                 <div class="cluster-container" data-cluster-id="${cluster.cluster_id}">
-                    <div class="cluster-badge"><i class="bi bi-diagram-3"></i> Cluster ID: ${cluster.cluster_id} • Total: ${cluster.size}</div>
-                    <div class="cluster-header">
+                    <div class="cluster-badge">
+                        <i class="bi bi-diagram-3"></i> Cluster ID: ${cluster.cluster_id} • Total: ${cluster.size}
+                    </div>
+                    <div class="cluster-header ${hasToggle ? 'has-toggle' : ''}">
                         ${toggleBtn}
                         ${reprCardHtml}
                     </div>
-                    <div class="cluster-members" id="members-${cluster.cluster_id}">
-                        </div>
+                    <div class="cluster-members" id="members-${cluster.cluster_id}"></div>
                 </div>`;
             });
 

@@ -780,12 +780,19 @@ body {
     position: relative;
 }
 
+/* 代表卡片基础样式 */
 .cluster-header .article-card {
     margin-bottom: 0;
     border-left: 5px solid #1a73e8;
     background: #fdfdfe;
 }
 
+/* 只有有展开按钮时，给卡片顶部额外留出空间 */
+.cluster-header.has-toggle .article-card {
+    padding-top: 56px;
+}
+
+/* Cluster badge 保持不变 */
 .cluster-badge {
     display: inline-block;
     margin-bottom: 12px;
@@ -797,19 +804,26 @@ body {
     font-weight: 600;
 }
 
+/* 按钮恢复到卡片右上角浮动 */
 .cluster-toggle-btn {
     position: absolute;
-    top: 20px;
-    right: 20px;
+    top: 12px;
+    right: 14px;
     z-index: 10;
+
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+
     padding: 6px 12px;
     border: 1px solid #1a73e8;
-    border-radius: 6px;
+    border-radius: 8px;
     background: #fff;
     color: #1a73e8;
     font-size: 0.85rem;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.2s ease;
 }
 
 .cluster-toggle-btn:hover {
@@ -865,6 +879,26 @@ body {
 .cluster-inline-collapse-btn:hover {
     background: #f5f7fa;
     color: #111;
+}
+
+@media (max-width: 768px) {
+    .cluster-members {
+        margin-left: 15px;
+        padding-left: 10px;
+    }
+
+    /* 移动端按钮稍微小一点，但仍保留在卡片右上 */
+    .cluster-toggle-btn {
+        top: 10px;
+        right: 10px;
+        padding: 5px 10px;
+        font-size: 0.82rem;
+    }
+
+    /* 移动端有按钮时，顶部留白也稍微缩一点 */
+    .cluster-header.has-toggle .article-card {
+        padding-top: 50px;
+    }
 }
 
 @keyframes fadeIn {
