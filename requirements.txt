@@ -91,3 +91,9 @@ PyRSS2Gen==1.1               # RSS generator
 # PyQtWebEngine
 
 streamlit
+
+-r AIClientCenter/requirements.txt
+-r MyPythonUtility/requirements.txt
+-r IntelligenceCrawler/requirements.txt
+-r PyLoggingBackend/requirements.txt
+

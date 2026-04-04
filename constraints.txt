@@ -1,3 +1,0 @@
-numpy==1.23.5
-pydantic==1.10.7
-tenacity==8.2.3
